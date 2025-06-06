@@ -1,2 +1,2 @@
 # deep-micro-compression
-Deep Micro Compression
+Deep Microcompression
