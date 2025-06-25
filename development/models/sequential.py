@@ -11,7 +11,7 @@ import copy
 from os import path
 
 from typing import (
-    List, Dict, Union, OrderedDict, Iterable, Callable, Optional
+    List, Dict, OrderedDict, Iterable, Callable, Optional, Union
 )
 from tqdm.auto import tqdm
 
@@ -131,6 +131,8 @@ class Sequential(nn.Sequential):
         for epoch in tqdm(range(epochs)):
             # Training phase
             train_loss = 0
+            train_data_len = 0
+
             if metrics is not None:
                 for name in metrics:
                     metrics_val[f"train_{name}"] = 0
@@ -145,6 +147,7 @@ class Sequential(nn.Sequential):
                 loss = criterion_fun(y_pred, y_true)
                 loss.backward()
                 train_loss += loss.item()
+                train_data_len += X.size(0)
 
                 if metrics is not None:
                     for name, func in metrics.items():
@@ -152,16 +155,18 @@ class Sequential(nn.Sequential):
 
                 optimizer_fun.step()
 
-            train_loss /= len(train_dataloader.dataset)
+            train_loss /= train_data_len
             if metrics is not None:
                 for name in metrics:
-                    metrics_val[f"train_{name}"] /= len(train_dataloader.dataset)
+                    metrics_val[f"train_{name}"] /= train_data_len
 
             # Validation phase
             if validation_dataloader is not None:
                 self.eval()
                 with torch.inference_mode():
                     validation_loss = 0
+                    validation_data_len = 0
+                    
                     if metrics is not None:
                         for name in metrics:
                             metrics_val[f"validation_{name}"] = 0
@@ -171,15 +176,16 @@ class Sequential(nn.Sequential):
                         y_true = y_true.to(device)
                         y_pred = self(X)
                         validation_loss += criterion_fun(y_pred, y_true).item()
+                        validation_data_len += X.size(0)
                         
                         if metrics is not None:
                             for name, func in metrics.items():
                                 metrics_val[f"validation_{name}"] += func(y_pred, y_true)
 
-                    validation_loss /= len(validation_dataloader.dataset)
+                    validation_loss /= validation_data_len
                     if metrics is not None:
                         for name in metrics:
-                            metrics_val[f"validation_{name}"] /= len(validation_dataloader.dataset)
+                            metrics_val[f"validation_{name}"] /= validation_data_len
 
             # Learning rate scheduling
             if lr_scheduler is not None: 
@@ -229,7 +235,12 @@ class Sequential(nn.Sequential):
         return
 
     @torch.inference_mode()
-    def evaluate(self, data_loader: data.DataLoader, metric, device: str = "cpu",) -> float:
+    def evaluate(
+        self, 
+        data_loader: data.DataLoader, 
+        metric_fun: Callable, 
+        device: str = "cpu"
+    ) -> float:
         """Evaluate model accuracy on given dataset
         
         Args:
@@ -241,16 +252,22 @@ class Sequential(nn.Sequential):
         """
         self.eval()
         metric_val = 0
-        for X, y_true in data_loader:
+        data_len = 0
+
+        for X, y_true in tqdm(data_loader):
             X = X.to(device)
             y_true = y_true.to(device)
             y_pred = self(X)
-            metric_val = metric(y_pred, y_true)
-        
-        metric_val /= X.size(0)
-        return metric_val
+            metric_val += metric_fun(y_pred, y_true)
+            data_len += X.size(0)
 
-    def get_weight_distributions(self, bins=256) -> Dict[str, Union[torch.Tensor, None]]:
+            # ###########################
+            # break # Remember to delete
+            # #########################
+
+        return metric_val / data_len
+
+    def get_weight_distributions(self, bins=256) -> Dict[str, Optional[torch.Tensor]]:
         """Get weight histograms for all layers
         
         Args:
