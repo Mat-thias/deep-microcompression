@@ -11,15 +11,13 @@ import copy
 from os import path
 
 from typing import (
-    List, Dict, Union, OrderedDict, Iterable, Callable
+    List, Dict, Union, OrderedDict, Iterable, Callable, Optional
 )
 from tqdm.auto import tqdm
 
 import torch
 from torch import nn
 from torch.utils import data
-
-import matplotlib.pyplot as plt
 
 from ..utilis import (
     get_quantize_scale_zero_point_per_tensor_assy,
@@ -69,22 +67,6 @@ class Sequential(nn.Sequential):
         for name, layer in self.named_children():
             self.layers[name] = layer
 
-        # Training components
-        self.optim_fn = None
-        self.criterion_fun = None
-        self.lr_scheduler = None
-
-    def set_optimizer(self, optim_fun, *args, **kwargs) -> None:
-        """Configure optimizer for training"""
-        self.optim_fn = optim_fun(self.parameters(), *args, **kwargs)
-
-    def set_criterion(self, criterion_fun, *args, **kwargs) -> None:
-        """Configure loss function"""
-        self.criterion_fun = criterion_fun(*args, **kwargs)
-
-    def set_lr_scheduler(self, lr_scheduler, *args, **kwargs) -> None:
-        """Configure learning rate scheduler"""
-        self.lr_scheduler = lr_scheduler(self.optim_fn, *args, **kwargs)
 
     def forward(self, input):
         """Forward pass with quantization support
@@ -97,15 +79,17 @@ class Sequential(nn.Sequential):
         """
         # Store input shape and sample test input (for later code generation)
         setattr(self, "input_shape", input.size())
-        if not hasattr(self, "test_input"):
-            import random
-            index = random.randint(0, input.size(0)-1)
-            print(f"Using this {index}")
-            test_input = input[index].unsqueeze(dim=0).cpu()
 
-            setattr(self, "test_input", test_input)
-            setattr(self, "test_input_quant", quantize_per_tensor_assy(
-                test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth))
+        # Saving the a test input data
+        # if not hasattr(self, "test_input"):
+        #     import random
+        #     index = random.randint(0, input.size(0)-1)
+        #     print(f"Using this {index}")
+        #     test_input = input[index].unsqueeze(dim=0).cpu()
+
+        #     setattr(self, "test_input", test_input)
+        #     setattr(self, "test_input_quant", quantize_per_tensor_assy(
+        #         test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth))
 
         # Apply quantization if configured
         if hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
@@ -115,17 +99,20 @@ class Sequential(nn.Sequential):
 
         # Pass through all layers
         for layer in self:
-            # Only apply layers that are actual torch modules
-            if isinstance(layer, nn.Module) and not isinstance(layer, 
-                (type(self.optim_fn), type(self.criterion_fun), type(self.lr_scheduler))):
-                input = layer(input)
+            input = layer(input)
                 
         return input
 
-    def fit(self, train_dataloader: data.DataLoader, epochs: int, 
-           validation_dataloader: data.DataLoader = None, 
-           metrics: Union[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]], None] = None,
-           device: str = "cpu") -> Dict[str, List[float]]:
+
+    def fit(
+            self, train_dataloader: data.DataLoader, epochs: int, 
+            criterion_fun: torch.nn.Module, 
+            optimizer_fun: torch.optim.Optimizer,
+            lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+            validation_dataloader: Optional[data.DataLoader] = None, 
+            metrics: Optional[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]]] = None,
+            device: str = "cpu"
+    ) -> Dict[str, List[float]]:
         """Training loop with optional validation and metrics tracking
         
         Args:
@@ -141,9 +128,6 @@ class Sequential(nn.Sequential):
         history = dict()
         metrics_val = dict()
 
-        assert self.optim_fn is not None and self.criterion_fun is not None, \
-            "Set your Optimizer and Criterion function."
-
         for epoch in tqdm(range(epochs)):
             # Training phase
             train_loss = 0
@@ -156,9 +140,9 @@ class Sequential(nn.Sequential):
                 X = X.to(device)
                 y_true = y_true.to(device)
 
-                self.optim_fn.zero_grad()
+                optimizer_fun.zero_grad()
                 y_pred = self(X)
-                loss = self.criterion_fun(y_pred, y_true)
+                loss = criterion_fun(y_pred, y_true)
                 loss.backward()
                 train_loss += loss.item()
 
@@ -166,7 +150,7 @@ class Sequential(nn.Sequential):
                     for name, func in metrics.items():
                         metrics_val[f"train_{name}"] += func(y_pred, y_true)
 
-                self.optim_fn.step()
+                optimizer_fun.step()
 
             train_loss /= len(train_dataloader.dataset)
             if metrics is not None:
@@ -186,7 +170,7 @@ class Sequential(nn.Sequential):
                         X = X.to(device)
                         y_true = y_true.to(device)
                         y_pred = self(X)
-                        validation_loss += self.criterion_fun(y_pred, y_true).item()
+                        validation_loss += criterion_fun(y_pred, y_true).item()
                         
                         if metrics is not None:
                             for name, func in metrics.items():
@@ -198,8 +182,8 @@ class Sequential(nn.Sequential):
                             metrics_val[f"validation_{name}"] /= len(validation_dataloader.dataset)
 
             # Learning rate scheduling
-            if self.lr_scheduler is not None: 
-                self.lr_scheduler.step(validation_loss)
+            if lr_scheduler is not None: 
+                lr_scheduler.step(validation_loss)
 
             # Logging
             if validation_dataloader is None:
@@ -230,12 +214,7 @@ class Sequential(nn.Sequential):
                 for name in metrics:
                     self.fit_history[f"train_{name}"] = self.fit_history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
                     history[f"train_{name}"] = history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
-            
-        # Final buffer updates
-        for layer in self.layers.values():
-            if hasattr(layer, "set_buffer"): 
-                layer.set_buffer()
-
+        
         return history
 
     @torch.no_grad()
@@ -250,7 +229,7 @@ class Sequential(nn.Sequential):
         return
 
     @torch.inference_mode()
-    def evaluate(self, data_loader: data.DataLoader, device: str = "cpu") -> float:
+    def evaluate(self, data_loader: data.DataLoader, metric, device: str = "cpu",) -> float:
         """Evaluate model accuracy on given dataset
         
         Args:
@@ -261,16 +240,15 @@ class Sequential(nn.Sequential):
             Accuracy percentage
         """
         self.eval()
-        accuracy = 0
+        metric_val = 0
         for X, y_true in data_loader:
             X = X.to(device)
             y_true = y_true.to(device)
             y_pred = self(X)
-            accuracy += (y_pred.argmax(dim=1) == y_true).sum().item()
-            break  # Only evaluate first batch
+            metric_val = metric(y_pred, y_true)
         
-        accuracy /= X.size(0)
-        return accuracy * 100
+        metric_val /= X.size(0)
+        return metric_val
 
     def get_weight_distributions(self, bins=256) -> Dict[str, Union[torch.Tensor, None]]:
         """Get weight histograms for all layers
@@ -377,7 +355,7 @@ class Sequential(nn.Sequential):
 
     @torch.no_grad()
     def get_dynamic_quantize_per_tensor_sensity(self, data_loader: data.DataLoader, 
-                                              bitwidths: Iterable[float], 
+                                              bitwidths: Iterable[int], 
                                               device: str = "cpu") -> Dict[float, List[float]]:
         """Analyze sensitivity to different quantization bitwidths (per-tensor)
         
