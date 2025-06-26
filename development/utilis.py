@@ -4,8 +4,12 @@
 """
 
 import struct
+import math
+from typing import Any, Tuple
+
 import torch
 from torch import nn
+
 
 # Quantization type constants
 QUANTIZATION_NONE = 0
@@ -19,7 +23,9 @@ INT8_BYTE_PER_LINE = 16
 FLOAT32_BYTE_PER_LINE = 4
 INT32_BYTE_PER_LINE = 4
 
-def get_bitwidth_range(bitwidth: int) -> tuple:
+
+
+def get_bitwidth_range(bitwidth: int) -> Tuple[int, int]:
     """Get the min/max range for a given bitwidth
     
     Args:
@@ -356,6 +362,7 @@ def convert_tensor_to_bytes_var(tensor: torch.Tensor,
 
         for line in torch.split(tensor.flatten(), INT8_BYTE_PER_LINE * data_per_byte):
             bytes = []
+            # for i in range(math.ceil(len(line)/data_per_byte)):
             for i in range(len(line)//data_per_byte):
                 data = []
                 for pos in range(data_per_byte):
@@ -375,3 +382,38 @@ def convert_tensor_to_bytes_var(tensor: torch.Tensor,
             
     var_def_str += "};\n"
     return var_header_str, var_def_str
+
+
+
+def get_size_in_bits(var: Any, is_packed:bool = False, bitwidth:int = 8) -> int:
+    """Returns the size of a variable in bits."""
+
+    # Handle ints and floats as scalars
+    if isinstance(var, int) or isinstance(var, float):
+        return 32  # assuming 32-bit for both
+
+    # Handle nn.Parameter
+    if isinstance(var, torch.nn.Parameter):
+        var = var.data  # extract the underlying tensor
+
+    # Handle torch.Tensor
+    if isinstance(var, torch.Tensor):
+        if var.dtype == torch.int8:
+            dtype_size = 8
+        elif var.dtype == torch.int32:
+            dtype_size = 32
+        elif var.dtype == torch.float32:
+            dtype_size = 32
+        elif var.dtype == torch.float64:
+            dtype_size = 64
+        else:
+            raise RuntimeError(f"get_size for dtype {var.dtype} not implemented!")
+        
+        numel = var.numel()
+        if is_packed:
+            data_per_byte = 8 // bitwidth
+            numel = math.ceil(numel/data_per_byte)
+
+        return numel * dtype_size
+
+    raise RuntimeError(f"get_size for type {type(var)} not implemented!")

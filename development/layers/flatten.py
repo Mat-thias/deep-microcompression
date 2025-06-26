@@ -44,6 +44,11 @@ class Flatten(nn.Flatten):
         # Store input shape for later use in pruning and code generation
         setattr(self, "input_shape", input.size())
         return input.flatten(self.start_dim, self.end_dim)
+    
+
+
+    def get_size_in_bits(self):
+        return 0
 
     @torch.no_grad()
     def prune_channel(self, 

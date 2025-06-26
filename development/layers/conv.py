@@ -28,6 +28,8 @@ from ..utilis import (
     DYNAMIC_QUANTIZATION_PER_CHANNEL,
     STATIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_CHANNEL,
+
+    get_size_in_bits
 )
 
 
@@ -55,7 +57,7 @@ class Conv2d(nn.Conv2d):
         # Store input shape for later use in code generation
         setattr(self, "input_shape", input.size())
 
-        # Use quantized weights if available
+        # Use pruned or quantized weights if available
         weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
         bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
 
@@ -110,6 +112,37 @@ class Conv2d(nn.Conv2d):
                 )
 
         return input
+    
+
+    def get_size_in_bits(self):
+        
+        # Use pruned or quantized weights if available
+        weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
+        bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
+
+        size = 0
+
+        if getattr(self, "quantization_type", QUANTIZATION_NONE) == QUANTIZATION_NONE:
+            size += get_size_in_bits(weight)
+            size += get_size_in_bits(bias)
+        else:
+            size += get_size_in_bits(weight, is_packed=True, bitwidth=self.quantization_bitwidth)
+            size += get_size_in_bits(bias, is_packed=True, bitwidth=self.quantization_bitwidth)
+
+        # Handle different quantization modes
+        if hasattr(self, "quantization_type"):
+            if getattr(self, "quantization_type") == DYNAMIC_QUANTIZATION_PER_TENSOR or getattr(self, "quantization_type") == DYNAMIC_QUANTIZATION_PER_CHANNEL:
+                size += get_size_in_bits(self.weight_scale)
+            elif getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
+                size += get_size_in_bits(self.input_zero_point)
+                size += get_size_in_bits(self.bias_scale)
+                size += get_size_in_bits(self.output_scale)
+                size += get_size_in_bits(self.output_zero_point)
+
+        return size
+
+
+
 
     @torch.no_grad()
     def prune_channel(self, 

@@ -13,6 +13,8 @@ from ..utilis import (
     STATIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_CHANNEL,
     QUANTIZATION_NONE,
+
+    get_size_in_bits
 )
 
 class ReLU(nn.ReLU):
@@ -49,6 +51,13 @@ class ReLU(nn.ReLU):
                 min_val = self.input_zero_point
 
         return torch.clamp(input, min=min_val)
+    
+
+    def get_size_in_bits(self):
+        if hasattr(self, "input_zero_point"):
+            return get_size_in_bits(self.input_zero_point)
+        return 0
+
 
     @torch.no_grad()
     def prune_channel(self, 

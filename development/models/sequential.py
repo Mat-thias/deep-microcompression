@@ -266,6 +266,13 @@ class Sequential(nn.Sequential):
             # #########################
 
         return metric_val / data_len
+    
+
+    def get_size_in_bits(self):
+        size = 0
+        for layer in self.layers.values():
+            size += layer.get_size_in_bits()
+        return size
 
     def get_weight_distributions(self, bins=256) -> Dict[str, Optional[torch.Tensor]]:
         """Get weight histograms for all layers

@@ -26,6 +26,9 @@ from ..utilis import (
     quantize_per_channel_sy,
     quantize_per_tensor_sy,
     convert_tensor_to_bytes_var,
+
+    get_size_in_bits,
+
     QUANTIZATION_NONE,
     DYNAMIC_QUANTIZATION_PER_TENSOR,
     DYNAMIC_QUANTIZATION_PER_CHANNEL,
@@ -94,6 +97,34 @@ class Linear(nn.Linear):
                     self.quantization_bitwidth
                 )
         return input
+    
+    def get_size_in_bits(self):
+        
+        # Use pruned or quantized weights if available
+        weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
+        bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
+
+        size = 0
+
+        if getattr(self, "quantization_type", QUANTIZATION_NONE) == QUANTIZATION_NONE:
+            size += get_size_in_bits(weight)
+            size += get_size_in_bits(bias)
+        else:
+            size += get_size_in_bits(weight, is_packed=True, bitwidth=self.quantization_bitwidth)
+            size += get_size_in_bits(bias, is_packed=True, bitwidth=self.quantization_bitwidth)
+
+        # Handle different quantization modes
+        if hasattr(self, "quantization_type"):
+            if getattr(self, "quantization_type") == DYNAMIC_QUANTIZATION_PER_TENSOR or getattr(self, "quantization_type") == DYNAMIC_QUANTIZATION_PER_CHANNEL:
+                size += get_size_in_bits(self.weight_scale)
+            elif getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
+                size += get_size_in_bits(self.input_zero_point)
+                size += get_size_in_bits(self.bias_scale)
+                size += get_size_in_bits(self.output_scale)
+                size += get_size_in_bits(self.output_zero_point)
+
+        return size
+
 
     @torch.no_grad()
     def prune_channel(self, 

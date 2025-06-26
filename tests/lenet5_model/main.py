@@ -75,7 +75,8 @@ except (RuntimeError, FileNotFoundError):
     torch.save(lenet5_model.state_dict(), lenet5_file)
 
 original_acc = lenet5_model.evaluate(mnist_test_loader, accuracy_fun, device=DEVICE)
-print(f"The original model accuracy is {original_acc*100:.2f}%.")
+original_size = lenet5_model.get_size_in_bits()//8
+print(f"The original model accuracy is {original_acc*100:.2f}% with size {original_size} bytes.")
 
 lenet5_model.cpu()
 
@@ -84,8 +85,9 @@ pruned_sparsity = [i/10 for i in range(10)]
 for sparsity in pruned_sparsity:
     pruned_model = lenet5_model.prune_channel(sparsity)
     acc = pruned_model.evaluate(mnist_test_loader, accuracy_fun)
+    size = pruned_model.get_size_in_bits()//8
     print(f"The pruned model with sparsity {sparsity} accuracy is {acc*100:.2f}%.")
-    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}%")
+    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}% and size drop is {(original_size - size)/original_size*100:.2f}%.")
 
 quantization_bitwidth = [i for i in range(8, 0, -1)]
 
@@ -93,30 +95,34 @@ quantization_bitwidth = [i for i in range(8, 0, -1)]
 for bitwidth in quantization_bitwidth:
     dynamic_quantized_per_tensor_model = lenet5_model.dynamic_quantize_per_tensor(bitwidth)
     acc = dynamic_quantized_per_tensor_model.evaluate(mnist_test_loader, accuracy_fun)
+    size = dynamic_quantized_per_tensor_model.get_size_in_bits()//8
     print(f"The dynamic quantized per tensor model with bitwidth {bitwidth} accuracy is {acc*100:.2f}%.")
-    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}%")
+    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}% and size drop is {(original_size - size)/original_size*100:.2f}%.")
 
 
 # DYNAMIC QUANTIZED MODEL PER TERSON
 for bitwidth in quantization_bitwidth:
     dynamic_quantized_per_channel_model = lenet5_model.dynamic_quantize_per_channel(bitwidth)
     acc = dynamic_quantized_per_channel_model.evaluate(mnist_test_loader, accuracy_fun)
+    size = dynamic_quantized_per_channel_model.get_size_in_bits()//8
     print(f"The dynamic quantized per channel model with bitwidth {bitwidth} accuracy is {acc*100:.2f}%.")
-    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}%")
+    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}% and size drop is {(original_size - size)/original_size*100:.2f}%.")
 
 
 # STATIC QUANTIZED MODEL PER TERSON
 for bitwidth in quantization_bitwidth:
     static_quantized_per_tensor_model = lenet5_model.static_quantize_per_tensor(next(iter(mnist_test_loader))[0], bitwidth)
     acc = static_quantized_per_tensor_model.evaluate(mnist_test_loader, accuracy_fun)
+    size = static_quantized_per_tensor_model.get_size_in_bits()//8
     print(f"The static quantized per tensor model with bitwidth {bitwidth} accuracy is {acc*100:.2f}%.")
-    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}%")
+    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}% and size drop is {(original_size - size)/original_size*100:.2f}%.")
 
 
 # STATIC QUANTIZED MODEL PER TERSON
 for bitwidth in quantization_bitwidth:
     static_quantized_per_channel_model = lenet5_model.static_quantize_per_channel(next(iter(mnist_test_loader))[0], bitwidth)
     acc = static_quantized_per_channel_model.evaluate(mnist_test_loader, accuracy_fun)
+    size = static_quantized_per_channel_model.get_size_in_bits()//8
     print(f"The static quantized per channel model with bitwidth {bitwidth} accuracy is {acc*100:.2f}%.")
-    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}%")
+    print(f"The accurancy drop is {(original_acc - acc)*100:.2f}% and size drop is {(original_size - size)/original_size*100:.2f}%.")
 

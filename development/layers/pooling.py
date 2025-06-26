@@ -51,6 +51,10 @@ class MaxPool2d(nn.MaxPool2d):
             ceil_mode=self.ceil_mode,
             return_indices=self.return_indices,
         )
+    
+
+    def get_size_in_bits(self):
+        return 0
 
     @torch.no_grad()
     def prune_channel(self, 
