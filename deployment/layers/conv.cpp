@@ -18,7 +18,8 @@
 #define PADDING_VALID 0
 #define PADDING_SAME  1
 
-#if defined(QUANTIZATION_NONE)
+#if defined(QUANTIZATION_NONE) || (!defined(DYNAMIC_QUANTIZATION_PER_TENSOR) && !defined(DYNAMIC_QUANTIZATION_PER_CHANNEL) \
+                               && !defined(STATIC_QUANTIZATION_PER_TENSOR) && !defined(STATIC_QUANTIZATION_PER_CHANNEL))
 
 // ======================================================================
 // Floating-Point Implementation

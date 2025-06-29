@@ -80,17 +80,28 @@ class Sequential(nn.Sequential):
         # Store input shape and sample test input (for later code generation)
         setattr(self, "input_shape", input.size())
 
+
+        ################################################################################################
         # Saving the a test input data
-        # if not hasattr(self, "test_input"):
-        #     import random
-        #     index = random.randint(0, input.size(0)-1)
-        #     print(f"Using this {index}")
-        #     test_input = input[index].unsqueeze(dim=0).cpu()
+        import random
+        index = random.randint(0, input.size(0)-1)
+        # index = 0
+        # print(f"Using this {index}")
 
-        #     setattr(self, "test_input", test_input)
-        #     setattr(self, "test_input_quant", quantize_per_tensor_assy(
-        #         test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth))
+        if not hasattr(self, "test_input"):
+            test_input = input[index].unsqueeze(dim=0).cpu()
 
+            setattr(self, "test_input", test_input)
+        
+        # if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
+        #                                            or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
+        #     if not hasattr(self, "test_input_quant"):
+        #         setattr(self, "test_input_quant", quantize_per_tensor_assy(
+        #             test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
+        #         )
+
+        ################################################################################################
+        
         # Apply quantization if configured
         if hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
             input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
@@ -261,9 +272,9 @@ class Sequential(nn.Sequential):
             metric_val += metric_fun(y_pred, y_true)
             data_len += X.size(0)
 
-            # ###########################
-            # break # Remember to delete
-            # #########################
+            ###########################
+            break # Remember to delete
+            #########################
 
         return metric_val / data_len
     
@@ -625,7 +636,7 @@ class Sequential(nn.Sequential):
         return max_output_even_size, max_output_odd_size
 
     @torch.no_grad()
-    def convert_to_c(self, var_name: str, dir: str = "./") -> None:
+    def convert_to_c(self, var_name: str, src_dir: str = "./", include_dir:str = "./") -> None:
         """Generate C code for deployment
         
         Args:
@@ -639,7 +650,7 @@ class Sequential(nn.Sequential):
         
         # Initialize file contents
         header_file = f"#ifndef {var_name.upper()}_H\n#define {var_name.upper()}_H\n\n"
-        header_file += "#include <stdint.h>\n\n\n"
+        header_file += "#include <stdint.h>\n#include \"deep_microcompression.h\"\n\n\n"
 
         definition_file = f"#include \"{var_name}.h\"\n\n"
         param_definition_file = f"#include \"{var_name}.h\"\n\n"
@@ -694,21 +705,48 @@ class Sequential(nn.Sequential):
         header_file += f"\n#endif //{var_name.upper()}_h\n"
 
         # Write files
-        write_str_to_c_file(header_file, f"{var_name}.h", dir)
-        write_str_to_c_file(definition_file, f"{var_name}_def.cpp", dir)
-        write_str_to_c_file(param_definition_file, f"{var_name}_params.cpp", dir)
+        write_str_to_c_file(header_file, f"{var_name}.h", include_dir)
+        write_str_to_c_file(definition_file, f"{var_name}_def.cpp", src_dir)
+        write_str_to_c_file(param_definition_file, f"{var_name}_params.cpp", src_dir)
 
+
+#################################################################################################################
         # Generate test input data
-        _, test_input_def = convert_tensor_to_bytes_var(self.test_input, "test_input", self.quantization_bitwidth)
+        # _, test_input_def = convert_tensor_to_bytes_var(self.test_input, "test_input", getattr(self, "quantization_bitwidth", 8))
         
-        var_def_str = f"\nconst uint8_t test_input_quant[] = {{\n"
-        for line in torch.split(self.test_input_quant.flatten(), 8):
-            var_def_str += "    " + ", ".join(
-                [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
-            ) + ",\n"
-        var_def_str += "};\n"
 
-        with open(path.join(dir, f"{var_name}_test_input.h"), "w") as file:
-            file.write(test_input_def + var_def_str)
+        if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
+                                                   or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
+            test_input_def = f"\nconst uint8_t test_input[] = {{\n"
+            for line in torch.split(quantize_per_tensor_assy(
+                    self.test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth).flatten(), 8):
+                test_input_def += "    " + ", ".join(
+                    [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
+                ) + ",\n"
+            test_input_def += "};\n"
+        else:
+            test_input_def = f"\nconst float test_input[] = {{\n"
+            for line in torch.split(self.test_input.flatten(), 8):
+                test_input_def += "    " + ", ".join(
+                    [f"{val:.4f}" for val in line]
+                ) + ",\n"
+            test_input_def += "};\n"
+
+    
+        with open(path.join(include_dir, f"{var_name}_test_input.h"), "w") as file:
+            file.write(test_input_def)
+
+
+#################################################################################################################
 
         return
+    
+    @torch.no_grad
+    def test(self):
+        # self.cpu()
+        # if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
+        #                                            or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
+        #     return self(quantize_per_tensor_assy(
+        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantization_bitwidth))
+        
+        return self(self.test_input.clone())

@@ -8,7 +8,8 @@
 
 #include "linear.h"
 
-#if defined(QUANTIZATION_NONE)
+#if defined(QUANTIZATION_NONE) || (!defined(DYNAMIC_QUANTIZATION_PER_TENSOR) && !defined(DYNAMIC_QUANTIZATION_PER_CHANNEL) \
+                               && !defined(STATIC_QUANTIZATION_PER_TENSOR) && !defined(STATIC_QUANTIZATION_PER_CHANNEL))
 
 /**
  * @brief Constructor for floating-point Linear layer
