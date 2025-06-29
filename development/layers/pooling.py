@@ -42,16 +42,16 @@ class MaxPool2d(nn.MaxPool2d):
         # Store input shape for later use in code generation
         setattr(self, "input_shape", input.size())
 
-        return nn.functional.max_pool2d(
-            input,
-            self.kernel_size,
-            self.stride,
-            self.padding,
-            self.dilation,
-            ceil_mode=self.ceil_mode,
-            return_indices=self.return_indices,
-        )
-    
+        # return nn.functional.max_pool2d(
+        #     input,
+        #     self.kernel_size,
+        #     self.stride,
+        #     self.padding,
+        #     self.dilation,
+        #     ceil_mode=self.ceil_mode,
+        #     return_indices=self.return_indices,
+        # )
+        return super().forward(input)
 
     def get_size_in_bits(self):
         return 0
@@ -73,6 +73,8 @@ class MaxPool2d(nn.MaxPool2d):
         Returns:
             Original channel indices (no pruning implemented)
         """
+        setattr(self, "pruned", True)
+
         return keep_prev_channel_index
 
     @torch.no_grad()

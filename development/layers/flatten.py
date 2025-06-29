@@ -43,7 +43,8 @@ class Flatten(nn.Flatten):
         """
         # Store input shape for later use in pruning and code generation
         setattr(self, "input_shape", input.size())
-        return input.flatten(self.start_dim, self.end_dim)
+        # return input.flatten(self.start_dim, self.end_dim)
+        return super().forward(input)
     
 
 
@@ -67,22 +68,24 @@ class Flatten(nn.Flatten):
         Returns:
             Adjusted channel indices accounting for flatten operation
         """
+        setattr(self, "pruned", True)
+
         # Calculate number of elements per channel in original input
         channel_numel = self.input_shape[2:].numel()
 
-        if is_output_layer:
-            # Output layer doesn't prune, just pass through
-            keep_channel_index = None
-            return keep_channel_index
+        # if is_output_layer:
+        #     # Output layer doesn't prune, just pass through
+        #     keep_current_channel_index = None
+        #     return keep_current_channel_index
 
         # Calculate start positions for each kept channel
         start_positions = keep_prev_channel_index * channel_numel
         channel_elements_index = torch.arange(channel_numel)
 
         # Generate indices for all elements in kept channels
-        keep_channel_index = start_positions.view(-1, 1) + channel_elements_index
+        keep_current_channel_index = start_positions.view(-1, 1) + channel_elements_index
 
-        return keep_channel_index.flatten()
+        return keep_current_channel_index.flatten()
 
     @torch.no_grad()
     def static_quantize_per_tensor(self,
@@ -133,6 +136,7 @@ class Flatten(nn.Flatten):
         output_batch_quant = input_batch_quant.flatten(self.start_dim, self.end_dim)
 
         return output_batch_real, output_batch_quant, input_scale, input_zero_point
+
 
     @torch.no_grad()
     def convert_to_c(self, var_name):

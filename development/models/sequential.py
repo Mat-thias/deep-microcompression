@@ -103,10 +103,10 @@ class Sequential(nn.Sequential):
         ################################################################################################
         
         # Apply quantization if configured
-        if hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
-            input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
-        elif hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
-            input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
+        # if hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
+        #     input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
+        # elif hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
+        #     input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
 
         # Pass through all layers
         for layer in self:
@@ -116,13 +116,14 @@ class Sequential(nn.Sequential):
 
 
     def fit(
-            self, train_dataloader: data.DataLoader, epochs: int, 
-            criterion_fun: torch.nn.Module, 
-            optimizer_fun: torch.optim.Optimizer,
-            lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-            validation_dataloader: Optional[data.DataLoader] = None, 
-            metrics: Optional[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]]] = None,
-            device: str = "cpu"
+        self, train_dataloader: data.DataLoader, epochs: int, 
+        criterion_fun: torch.nn.Module, 
+        optimizer_fun: torch.optim.Optimizer,
+        lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
+        validation_dataloader: Optional[data.DataLoader] = None, 
+        metrics: Optional[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]]] = None,
+        compression_aware: bool = False,
+        device: str = "cpu"
     ) -> Dict[str, List[float]]:
         """Training loop with optional validation and metrics tracking
         
@@ -164,6 +165,15 @@ class Sequential(nn.Sequential):
                     for name, func in metrics.items():
                         metrics_val[f"train_{name}"] += func(y_pred, y_true)
 
+
+                if compression_aware:
+                    self.set_compression_parameters()
+                    # for layer in self.layers.values():
+                    #     if hasattr(layer, "apply_training_compression"):
+                    #         layer.apply_training_compression()
+
+                            # print(layer)
+
                 optimizer_fun.step()
 
             train_loss /= train_data_len
@@ -204,16 +214,16 @@ class Sequential(nn.Sequential):
 
             # Logging
             if validation_dataloader is None:
-                print(f"epoch {epoch:4d} train loss {train_loss:.4f}", end="")
+                print(f"epoch {epoch:4d} | train loss {train_loss:.4f}", end="")
                 if metrics is not None:
                     for name in metrics:
-                        print(f" train {name} {metrics_val[f'train_{name}']:.4f}", end="")
+                        print(f" | train {name} {metrics_val[f'train_{name}']:.4f}", end="")
                 print()
             else:
-                print(f"epoch {epoch:4d} train loss {train_loss:.4f} validation loss {validation_loss:.4f}", end="")
+                print(f"epoch {epoch:4d} | train loss {train_loss:.4f} | validation loss {validation_loss:.4f}", end="")
                 if metrics is not None: 
                     for name in metrics:
-                        print(f" validation {name} {metrics_val[f'validation_{name}']:.4f}", end="")
+                        print(f" | train {name} {metrics_val[f'train_{name}']:.4f} | validation {name} {metrics_val[f'validation_{name}']:.4f}", end="")
                 print()
 
                 # Store validation metrics
@@ -231,8 +241,16 @@ class Sequential(nn.Sequential):
                 for name in metrics:
                     self.fit_history[f"train_{name}"] = self.fit_history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
                     history[f"train_{name}"] = history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
-        
+
         return history
+    
+    def set_compression_parameters(self) -> None:
+        for layer in self.layers.values():
+            if hasattr(layer, "set_compression_parameters"):
+                layer.set_compression_parameters()
+
+        return
+
 
     @torch.no_grad()
     def revert_param(self):
@@ -272,9 +290,9 @@ class Sequential(nn.Sequential):
             metric_val += metric_fun(y_pred, y_true)
             data_len += X.size(0)
 
-            ###########################
-            break # Remember to delete
-            #########################
+            # ###########################
+            # break # Remember to delete
+            # #########################
 
         return metric_val / data_len
     
@@ -351,8 +369,11 @@ class Sequential(nn.Sequential):
 
         return history
 
-    def prune_channel(self, sparsity: Union[Dict[str, float], float], 
-                     metric: str = "l2") -> None:
+    def prune_channel(
+            self, 
+            sparsity: Union[Dict[str, float], float], 
+            metric: str = "l2"
+        ) -> "Sequential":
         """Create pruned version of model
         
         Args:
@@ -362,7 +383,11 @@ class Sequential(nn.Sequential):
         Returns:
             New model instance with pruned channels
         """
+
         model = copy.deepcopy(self)
+
+        setattr(model, "pruned", True)
+
         keep_prev_channel_index = None
 
         # Convert uniform sparsity to per-layer dict if needed
@@ -377,14 +402,16 @@ class Sequential(nn.Sequential):
             if hasattr(layer, "prune_channel"):
                 keep_prev_channel_index = layer.prune_channel(
                     sparsity[name], keep_prev_channel_index, 
-                    is_output_layer=False, metric=metric)
+                    is_output_layer=False, metric=metric
+                )
 
         # Prune last layer
         name, layer = list(model.layers.items())[-1]
         if hasattr(layer, "prune_channel"):
             keep_prev_channel_index = layer.prune_channel(
                 sparsity[name], keep_prev_channel_index, 
-                is_output_layer=True, metric=metric)
+                is_output_layer=True, metric=metric
+            )
                 
         return model
 
@@ -408,6 +435,7 @@ class Sequential(nn.Sequential):
             model = self.dynamic_quantize_per_tensor(bitwidth)
             history[bitwidth] = model.evaluate(data_loader, device=device)
             print(history)
+
 
         return history
 

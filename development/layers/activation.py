@@ -42,15 +42,16 @@ class ReLU(nn.ReLU):
         setattr(self, "input_shape", input.size())
         
         # Determine minimum value based on quantization mode
-        min_val = 0  # Default for non-quantized case
+        # min_val = 0  # Default for non-quantized case
         
-        if hasattr(self, "quantization_type"):
-            if getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
-                min_val = self.input_zero_point
-            elif getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
-                min_val = self.input_zero_point
+        # if hasattr(self, "quantization_type"):
+        #     if getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
+        #         min_val = self.input_zero_point
+        #     elif getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
+        #         min_val = self.input_zero_point
 
-        return torch.clamp(input, min=min_val)
+        # return torch.clamp(input, min=min_val)
+        return super().forward(input)
     
 
     def get_size_in_bits(self):
@@ -76,6 +77,8 @@ class ReLU(nn.ReLU):
         Returns:
             Original channel indices (no pruning implemented)
         """
+        setattr(self, "pruned", True)
+
         return keep_prev_channel_index
 
     @torch.no_grad()
@@ -144,8 +147,8 @@ class ReLU(nn.ReLU):
 
         if getattr(self, "quantization_type", QUANTIZATION_NONE) != STATIC_QUANTIZATION_PER_TENSOR:
             layer_def = f"{self.__class__.__name__} {var_name}({input_size});\n"
-        else:
-            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, {self.input_zero_point});\n"
+        # else:
+        #     layer_def = f"{self.__class__.__name__} {var_name}({input_size}, {self.input_zero_point});\n"
 
         layer_header = f"extern {self.__class__.__name__} {var_name};\n\n"
         layer_param_def = ""
