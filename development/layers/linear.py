@@ -147,7 +147,10 @@ class Linear(nn.Linear):
 
     @torch.no_grad()
     def get_compression_parameters(self):
-        
+
+        weight = self.weight
+        bias = self.bias
+
         if getattr(self, "pruned", False):
             weight, bias = self.get_prune_parameters()
 
@@ -481,6 +484,13 @@ class Linear(nn.Linear):
         self.register_buffer("output_zero_point", output_zero_point)
 
         return output_batch_real, output_batch_quant, output_scale, output_zero_point
+
+
+    def get_output_tensor_shape(self, input_shape):
+
+        out_features, _ = self.get_compression_parameters()[0].size()
+        return torch.Size((out_features,))
+    
 
     @torch.no_grad()
     def convert_to_c(self, var_name):

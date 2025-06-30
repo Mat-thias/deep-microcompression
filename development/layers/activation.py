@@ -132,7 +132,12 @@ class ReLU(nn.ReLU):
         output_batch_quant = torch.clamp(input_batch_quant, min=input_zero_point)
 
         return output_batch_real, output_batch_quant, input_scale, input_zero_point
+    
+    def get_output_tensor_shape(self, input_shape):
 
+        return input_shape
+    
+    
     @torch.no_grad()
     def convert_to_c(self, var_name):
         """Generates C code declarations for this layer

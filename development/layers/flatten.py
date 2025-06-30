@@ -137,6 +137,10 @@ class Flatten(nn.Flatten):
 
         return output_batch_real, output_batch_quant, input_scale, input_zero_point
 
+    def get_output_tensor_shape(self, input_shape):
+
+        return torch.Size((input_shape.numel(),))
+    
 
     @torch.no_grad()
     def convert_to_c(self, var_name):
@@ -149,6 +153,7 @@ class Flatten(nn.Flatten):
             Tuple of (header declaration, layer definition, parameter definition)
         """
         input_size = self.input_shape[1:].numel()
+        
 
         layer_def = f"{self.__class__.__name__} {var_name}({input_size});\n"
         layer_header = f"extern {self.__class__.__name__} {var_name};\n\n"

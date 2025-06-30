@@ -645,22 +645,23 @@ class Sequential(nn.Sequential):
             Tuple of (max_even_size, max_odd_size) workspace requirements
         """
         # Create random input tensor based on model's expected input shape
-        input_shape = list(self.input_shape)
-        input_shape[0] = 1 
-        x = torch.randn(input_shape)
 
-        max_output_even_size = x.numel()
+        input_shape = self.input_shape[1:]
+        
+        max_output_even_size = input_shape.numel()
         max_output_odd_size = 0
+        
+        output_shape = input_shape
         
         # Track maximum tensor sizes at even/odd layers
         for i, layer in enumerate(self.layers.values(), start=1):
-            x = layer(x)
+            output_shape = layer.get_output_tensor_shape(output_shape)
 
             if (i % 2 == 0):
-                max_output_even_size = max(max_output_even_size, x.numel())
+                max_output_even_size = max(max_output_even_size, output_shape.numel())
             else:
-                max_output_odd_size = max(max_output_odd_size, x.numel())
-
+                max_output_odd_size = max(max_output_odd_size, output_shape.numel())
+            print(i, output_shape, layer)
         return max_output_even_size, max_output_odd_size
 
     @torch.no_grad()

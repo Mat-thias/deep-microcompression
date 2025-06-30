@@ -121,9 +121,11 @@ class Conv2d(nn.Conv2d):
 
     def get_size_in_bits(self):
         
-        # Use pruned or quantized weights if available
-        weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
-        bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
+        # # Use pruned or quantized weights if available
+        # weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
+        # bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
+
+
 
         size = 0
 
@@ -158,6 +160,9 @@ class Conv2d(nn.Conv2d):
 
     @torch.no_grad()
     def get_compression_parameters(self):
+        
+        weight = self.weight
+        bias = self.bias
 
         if getattr(self, "pruned", False):
             weight, bias = self.get_prune_parameters()
@@ -503,6 +508,25 @@ class Conv2d(nn.Conv2d):
         self.register_buffer("output_zero_point", output_zero_point)
         
         return output_batch_real, output_batch_quant, output_scale, output_zero_point
+
+
+    def get_output_tensor_shape(self, input_shape):
+        C_in, H_in, W_in = input_shape
+        
+        # Unpack parameters (handle both int and tuple)
+        def _pair(x): return x if isinstance(x, tuple) else (x, x)
+        
+        # kH, kW = _pair(self.kernel_size)
+        C_out, _, kH, kW = self.get_compression_parameters()[0].size()
+        sH, sW = _pair(self.stride)
+        pH, pW = _pair(self.padding)
+        dH, dW = _pair(self.dilation)
+        
+        H_out = ((H_in + 2 * pH - dH * (kH - 1) - 1) // sH) + 1
+        W_out = ((W_in + 2 * pW - dW * (kW - 1) - 1) // sW) + 1
+        
+        return torch.Size((C_out, H_out, W_out))
+    
 
     @torch.no_grad()
     def convert_to_c(self, var_name):

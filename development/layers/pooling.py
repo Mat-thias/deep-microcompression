@@ -150,6 +150,23 @@ class MaxPool2d(nn.MaxPool2d):
         )
 
         return output_batch_real, output_batch_quant, input_scale, input_zero_point
+    
+    def get_output_tensor_shape(self, input_shape):
+        
+        C, H_in, W_in = input_shape
+        
+        def _pair(x): return x if isinstance(x, tuple) else (x, x)
+        
+        kH, kW = _pair(self.kernel_size)
+        sH, sW = _pair(self.stride or self.kernel_size)  # PyTorch uses kernel_size as default if stride is None
+        pH, pW = _pair(self.padding)
+        dH, dW = _pair(self.dilation)
+        
+        H_out = ((H_in + 2 * pH - dH * (kH - 1) - 1) // sH) + 1
+        W_out = ((W_in + 2 * pW - dW * (kW - 1) - 1) // sW) + 1
+        
+        return torch.Size((C, H_out, W_out))
+    
 
     @torch.no_grad()
     def convert_to_c(self, var_name):
