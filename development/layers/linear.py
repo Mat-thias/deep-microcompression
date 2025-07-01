@@ -16,6 +16,8 @@ from typing import Optional, Tuple
 import torch
 from torch import nn
 
+from .layer import Layer
+
 from ..utilis import (
     get_quantize_scale_per_channel_sy,
     get_quantize_scale_per_tensor_sy,
@@ -37,7 +39,7 @@ from ..utilis import (
 )
 
 
-class Linear(nn.Linear):
+class Linear(nn.Linear, Layer):
     """Quantization-aware Linear layer with support for:
         - Standard linear operation
         - Dynamic/static quantization (per-tensor and per-channel)

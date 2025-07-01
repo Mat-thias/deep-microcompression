@@ -11,13 +11,14 @@ from typing import Union
 import torch
 from torch import nn
 
+from .layer import Layer
+
 from ..utilis import (
     STATIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_CHANNEL,
 )
 
-
-class Flatten(nn.Flatten):
+class Flatten(nn.Flatten, Layer):
     """Quantization-aware Flatten layer that maintains:
         - Standard flatten functionality
         - Quantization state pass-through

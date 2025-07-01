@@ -11,6 +11,8 @@ from typing import Union
 import torch
 from torch import nn
 
+from .layer import Layer
+
 from ..utilis import (
     QUANTIZATION_NONE,
     DYNAMIC_QUANTIZATION_PER_TENSOR,
@@ -19,7 +21,7 @@ from ..utilis import (
 )
 
 
-class MaxPool2d(nn.MaxPool2d):
+class MaxPool2d(nn.MaxPool2d, Layer):
     """Quantization-aware MaxPool2d layer with support for:
         - Standard max pooling operation
         - Quantized inference modes

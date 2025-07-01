@@ -6,7 +6,8 @@
     3. C code generation for deployment
 """
 
-from typing import Union
+from typing import Optional
+
 import torch
 from torch import nn
 from ..utilis import (
@@ -17,7 +18,9 @@ from ..utilis import (
     get_size_in_bits
 )
 
-class ReLU(nn.ReLU):
+from .layer import Layer
+
+class ReLU(nn.ReLU, Layer):
     """Quantization-aware ReLU layer with support for:
         - Standard ReLU operation
         - Quantized inference modes
@@ -63,7 +66,7 @@ class ReLU(nn.ReLU):
     @torch.no_grad()
     def prune_channel(self, 
                      sparsity: float, 
-                     keep_prev_channel_index: Union[torch.Tensor, None], 
+                     keep_prev_channel_index: Optional[torch.Tensor], 
                      is_output_layer: bool = False, 
                      metric: str = "l2"):
         """Placeholder for channel pruning functionality

@@ -10,8 +10,11 @@
 __all__ = ["Conv2d"]
 
 from typing import Optional, Tuple
+
 import torch
 from torch import nn
+
+from .layer import Layer
 
 from ..utilis import (
     get_quantize_scale_per_channel_sy,
@@ -33,7 +36,7 @@ from ..utilis import (
 )
 
 
-class Conv2d(nn.Conv2d):
+class Conv2d(nn.Conv2d, Layer):
     """Quantization-aware Conv2d layer with support for:
         - Standard convolution operation
         - Dynamic/static quantization (per-tensor and per-channel)
@@ -169,20 +172,6 @@ class Conv2d(nn.Conv2d):
         return weight, bias
     
 
-
-    # @torch.no_grad()
-    # def apply_training_compression(self, ):
-
-    #     if getattr(self, "pruned", False):
-    #         self.apply_prune_channel()
-    #         # if hasattr(self, "weight_mask"): 
-    #         #     self.weight.mul_(getattr(self, "weight_mask"))
-    #         #     print("hhhh")
-    #         # if hasattr(self, "bias_mask"): 
-    #         #     self.bias.mul_(getattr(self, "bias_mask"))
-            
-    #     return
-
     @torch.no_grad()
     def prune_channel(self, 
                      sparsity: float, 
@@ -202,6 +191,9 @@ class Conv2d(nn.Conv2d):
         """
         setattr(self, "pruned", True)
 
+
+        assert(self.groups == 1 or self.groups == self.in_channels), "Channel Pruning is yet to be implement for grouped convolution, on Deepwise convolution."
+
         sparsity = min(max(0., sparsity), 1.)
 
         # weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
@@ -209,6 +201,8 @@ class Conv2d(nn.Conv2d):
 
         if keep_prev_channel_index is None:
             keep_prev_channel_index = torch.arange(self.in_channels)
+        if self.groups == self.in_channels:
+            keep_prev_channel_index = torch.arange(1)
         setattr(self, "keep_prev_channel_index", keep_prev_channel_index)
         # weight_dmc = torch.index_select(weight, 1, keep_prev_channel_index)
         # weight_mask[:,keep_prev_channel_index,:,:] = 1
@@ -223,11 +217,21 @@ class Conv2d(nn.Conv2d):
         else:
             # Calculate channel importance
             importance = self.weight.pow(2) if metric == "l2" else self.weight.abs()
-            channel_importance = importance.sum(dim=[1, 2, 3])
-            threshold = channel_importance.quantile(sparsity)
-            keep_current_channel_index = torch.nonzero(
-                (channel_importance >= threshold).to(torch.int32)
-            ).squeeze(dim=1)
+
+            keep_current_channel_index = []
+            group_size = self.out_channels // self.groups
+
+            for g, grouped_importance in enumerate(torch.chunk(importance, chunks=self.groups, dim=0)):
+                channel_importance = grouped_importance.sum(dim=[1, 2, 3])
+                threshold = channel_importance.quantile(sparsity)
+                group_keep_current_channel_index = torch.nonzero(
+                    (channel_importance >= threshold).to(torch.int32)
+                ).squeeze(dim=1)
+
+                group_keep_current_channel_index += g * group_size
+                keep_current_channel_index.append(group_keep_current_channel_index)
+
+            keep_current_channel_index = torch.concat(keep_current_channel_index, dim=0)
             setattr(self, "keep_current_channel_index", keep_current_channel_index)
 
             # # Update weights and biases
@@ -254,7 +258,9 @@ class Conv2d(nn.Conv2d):
         weight_mask_prev_channel = torch.zeros_like(self.weight)
         weight_mask_current_channel = torch.zeros_like(self.weight)
         bias_mask = torch.zeros_like(self.bias)
-
+        
+        print("Here")
+        print(self.weight.size(), getattr(self, "keep_prev_channel_index"), getattr(self, "keep_current_channel_index"))
         weight_mask_prev_channel[:,getattr(self, "keep_prev_channel_index"),:,:] = 1
         weight_mask_current_channel[getattr(self, "keep_current_channel_index"),:,:,:] = 1
         weight_mask = torch.mul(weight_mask_prev_channel, weight_mask_current_channel)

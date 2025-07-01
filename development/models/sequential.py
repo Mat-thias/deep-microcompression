@@ -19,6 +19,8 @@ import torch
 from torch import nn
 from torch.utils import data
 
+from ..layers.layer import Layer
+
 from ..utilis import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
@@ -56,10 +58,13 @@ class Sequential(nn.Sequential):
             
             # Auto-name layers with type_index convention (e.g. conv2d_0)
             for layer in args:
-                class_idx[layer.__class__.__name__] = class_idx.get(layer.__class__.__name__, -1) + 1
-                idx = class_idx[layer.__class__.__name__]
-                layer_type = layer.__class__.__name__.lower()
-                self.add_module(f"{layer_type}_{idx}", layer)
+                if isinstance(layer, Layer) and isinstance(layer, nn.Module): 
+                    class_idx[layer.__class__.__name__] = class_idx.get(layer.__class__.__name__, -1) + 1
+                    idx = class_idx[layer.__class__.__name__]
+                    layer_type = layer.__class__.__name__.lower()
+                    self.add_module(f"{layer_type}_{idx}", layer)
+                else:
+                    raise TypeError(f"layer of type {type(layer)} isn't a Layer or Module.")
 
         # Store layers in dict for easy access
         self.layers = dict()
@@ -208,18 +213,12 @@ class Sequential(nn.Sequential):
                         for name in metrics:
                             metrics_val[f"validation_{name}"] /= validation_data_len
 
-            # Learning rate scheduling
-            if lr_scheduler is not None: 
-                lr_scheduler.step(validation_loss)
+                # Learning rate scheduling
+                if lr_scheduler is not None: 
+                    lr_scheduler.step(validation_loss)
 
             # Logging
-            if validation_dataloader is None:
-                print(f"epoch {epoch:4d} | train loss {train_loss:.4f}", end="")
-                if metrics is not None:
-                    for name in metrics:
-                        print(f" | train {name} {metrics_val[f'train_{name}']:.4f}", end="")
-                print()
-            else:
+
                 print(f"epoch {epoch:4d} | train loss {train_loss:.4f} | validation loss {validation_loss:.4f}", end="")
                 if metrics is not None: 
                     for name in metrics:
@@ -234,6 +233,14 @@ class Sequential(nn.Sequential):
                         self.fit_history[f"validation_{name}"] = self.fit_history.get(f"validation_{name}", []) + [metrics_val[f"validation_{name}"]]
                         history[f"validation_{name}"] = history.get(f"validation_{name}", []) + [metrics_val[f"validation_{name}"]]
 
+            # if validation_dataloader is None:
+            else:
+                print(f"epoch {epoch:4d} | train loss {train_loss:.4f}", end="")
+                if metrics is not None:
+                    for name in metrics:
+                        print(f" | train {name} {metrics_val[f'train_{name}']:.4f}", end="")
+                print()
+            
             # Store training metrics
             self.fit_history["train_loss"] = self.fit_history.get("train_loss", []) + [train_loss]
             history["train_loss"] = history.get("train_loss", []) + [train_loss]
@@ -661,7 +668,6 @@ class Sequential(nn.Sequential):
                 max_output_even_size = max(max_output_even_size, output_shape.numel())
             else:
                 max_output_odd_size = max(max_output_odd_size, output_shape.numel())
-            print(i, output_shape, layer)
         return max_output_even_size, max_output_odd_size
 
     @torch.no_grad()
