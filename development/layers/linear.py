@@ -18,7 +18,7 @@ from torch import nn
 
 from .layer import Layer
 
-from ..utilis import (
+from ..utils import (
     get_quantize_scale_per_channel_sy,
     get_quantize_scale_per_tensor_sy,
     get_quantize_scale_zero_point_per_tensor_assy,
@@ -496,7 +496,7 @@ class Linear(nn.Linear, Layer):
     
 
     @torch.no_grad()
-    def convert_to_c(self, var_name):
+    def convert_to_c(self, var_name, input_shape):
         """Generate C code declarations for this layer
         
         Args:

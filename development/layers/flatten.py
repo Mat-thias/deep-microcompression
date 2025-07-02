@@ -13,7 +13,7 @@ from torch import nn
 
 from .layer import Layer
 
-from ..utilis import (
+from ..utils import (
     STATIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_CHANNEL,
 )
@@ -42,8 +42,8 @@ class Flatten(nn.Flatten, Layer):
         Returns:
             Flattened tensor according to start_dim and end_dim
         """
-        # Store input shape for later use in pruning and code generation
         setattr(self, "input_shape", input.size())
+        
         # return input.flatten(self.start_dim, self.end_dim)
         return super().forward(input)
     
@@ -144,7 +144,7 @@ class Flatten(nn.Flatten, Layer):
     
 
     @torch.no_grad()
-    def convert_to_c(self, var_name):
+    def convert_to_c(self, var_name, input_shape):
         """Generate C code declarations for this layer
         
         Args:
@@ -153,7 +153,7 @@ class Flatten(nn.Flatten, Layer):
         Returns:
             Tuple of (header declaration, layer definition, parameter definition)
         """
-        input_size = self.input_shape[1:].numel()
+        input_size = input_shape.numel()
         
 
         layer_def = f"{self.__class__.__name__} {var_name}({input_size});\n"

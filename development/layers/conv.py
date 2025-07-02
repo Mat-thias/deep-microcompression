@@ -16,7 +16,7 @@ from torch import nn
 
 from .layer import Layer
 
-from ..utilis import (
+from ..utils import (
     get_quantize_scale_per_channel_sy,
     get_quantize_scale_per_tensor_sy,
     get_quantize_scale_zero_point_per_tensor_assy,
@@ -57,9 +57,6 @@ class Conv2d(nn.Conv2d, Layer):
         Returns:
             Output tensor after convolution with quantization if enabled
         """
-        # Store input shape for later use in code generation
-        setattr(self, "input_shape", input.size())
-
         # Use pruned or quantized weights if available
         # weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
         # bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
@@ -196,58 +193,44 @@ class Conv2d(nn.Conv2d, Layer):
 
         sparsity = min(max(0., sparsity), 1.)
 
-        # weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
-        # bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
 
         if keep_prev_channel_index is None:
             keep_prev_channel_index = torch.arange(self.in_channels)
-        if self.groups == self.in_channels:
-            keep_prev_channel_index = torch.arange(1)
-        setattr(self, "keep_prev_channel_index", keep_prev_channel_index)
-        # weight_dmc = torch.index_select(weight, 1, keep_prev_channel_index)
-        # weight_mask[:,keep_prev_channel_index,:,:] = 1
-        # setattr(self, "weight_mask", weight_mask)
 
-        if is_output_layer:
-            keep_current_channel_index = torch.arange(self.out_channels)
-            setattr(self, "keep_current_channel_index", keep_current_channel_index)
-            # self.register_buffer("weight_dmc", weight_dmc)
-            # self.register_buffer("bias_dmc", bias)
-            # return keep_current_channel_index
-        else:
-            # Calculate channel importance
-            importance = self.weight.pow(2) if metric == "l2" else self.weight.abs()
+        # weight = self.weight_dmc if hasattr(self, "weight_dmc") else self.weight
+        # bias = self.bias_dmc if hasattr(self, "bias_dmc") else self.bias
+        if self.groups == 1:
 
-            keep_current_channel_index = []
-            group_size = self.out_channels // self.groups
+            setattr(self, "prune_groups", 1)
+            
+            if is_output_layer:
+                keep_current_channel_index = torch.arange(self.out_channels)
 
-            for g, grouped_importance in enumerate(torch.chunk(importance, chunks=self.groups, dim=0)):
-                channel_importance = grouped_importance.sum(dim=[1, 2, 3])
-                threshold = channel_importance.quantile(sparsity)
-                group_keep_current_channel_index = torch.nonzero(
-                    (channel_importance >= threshold).to(torch.int32)
+            else:
+                importance = self.weight.pow(2) if metric == "l2" else self.weight.abs()
+                importance = importance.sum(dim=[1, 2, 3])
+                threshold = importance.quantile(sparsity)
+                keep_current_channel_index = torch.nonzero(
+                    (importance >= threshold).to(torch.int32)
                 ).squeeze(dim=1)
-
-                group_keep_current_channel_index += g * group_size
-                keep_current_channel_index.append(group_keep_current_channel_index)
-
-            keep_current_channel_index = torch.concat(keep_current_channel_index, dim=0)
             setattr(self, "keep_current_channel_index", keep_current_channel_index)
 
-            # # Update weights and biases
-            # self.register_buffer(
-            #     "weight_dmc", 
-            #     torch.index_select(weight_dmc, 0, keep_current_channel_index)
-            # )
-            # weight_mask[keep_current_channel_index] = 1
-            # setattr(self, "weight_mask", weight_mask)
+        else:# self.groups == self.in_channels:
+            setattr(self, "prune_groups", keep_prev_channel_index.size(0))
 
-            # self.register_buffer(
-            #     "bias_dmc", 
-            #     torch.index_select(bias, 0, keep_current_channel_index)
-            # )
-            # bias_mask[keep_current_channel_index] = 1
-            # setattr(self, "bias_mask", bias_mask)
+            keep_prev_channel_index_temp = keep_prev_channel_index
+            
+            keep_prev_channel_index = torch.arange(1)
+
+            if is_output_layer:
+                keep_current_channel_index = torch.arange(self.out_channels)
+ 
+            else:
+                keep_current_channel_index = keep_prev_channel_index_temp
+
+        setattr(self, "keep_prev_channel_index", keep_prev_channel_index)
+        setattr(self, "keep_current_channel_index", keep_current_channel_index)
+ 
         self.set_prune_parameters()
 
         return keep_current_channel_index
@@ -258,9 +241,7 @@ class Conv2d(nn.Conv2d, Layer):
         weight_mask_prev_channel = torch.zeros_like(self.weight)
         weight_mask_current_channel = torch.zeros_like(self.weight)
         bias_mask = torch.zeros_like(self.bias)
-        
-        print("Here")
-        print(self.weight.size(), getattr(self, "keep_prev_channel_index"), getattr(self, "keep_current_channel_index"))
+
         weight_mask_prev_channel[:,getattr(self, "keep_prev_channel_index"),:,:] = 1
         weight_mask_current_channel[getattr(self, "keep_current_channel_index"),:,:,:] = 1
         weight_mask = torch.mul(weight_mask_prev_channel, weight_mask_current_channel)
@@ -275,6 +256,7 @@ class Conv2d(nn.Conv2d, Layer):
 
     @torch.no_grad()
     def get_prune_parameters(self):
+
         weight = torch.index_select(self.weight, 1, getattr(self, "keep_prev_channel_index"))
         weight = torch.index_select(weight, 0, getattr(self, "keep_current_channel_index"))
         bias = torch.index_select(self.bias, 0, getattr(self, "keep_current_channel_index"))
@@ -516,6 +498,7 @@ class Conv2d(nn.Conv2d, Layer):
 
 
     def get_output_tensor_shape(self, input_shape):
+
         C_in, H_in, W_in = input_shape
         
         # Unpack parameters (handle both int and tuple)
@@ -534,7 +517,7 @@ class Conv2d(nn.Conv2d, Layer):
     
 
     @torch.no_grad()
-    def convert_to_c(self, var_name):
+    def convert_to_c(self, var_name, input_shape):
         """Generate C code declarations for this layer
         
         Args:
@@ -547,13 +530,14 @@ class Conv2d(nn.Conv2d, Layer):
         # bias = getattr(self, "bias_dmc", self.bias)
 
         weight, bias = self.get_compression_parameters()
+        
+        input_channel_size, input_row_size, input_col_size = input_shape
 
-        input_row_size, input_col_size = self.input_shape[2:4]
-
-        output_channel_size, input_channel_size,\
+        output_channel_size, _,\
         kernel_row_size, kernel_col_size = weight.size()
         stride_row, stride_col = self.stride
         padding = self.padding[0]
+        groups = getattr(self, "prune_groups", self.groups)
 
         # Convert weights and parameters to C byte arrays
         param_header, param_def = convert_tensor_to_bytes_var(
@@ -607,7 +591,7 @@ class Conv2d(nn.Conv2d, Layer):
                 f"{self.__class__.__name__} {var_name}({input_channel_size}, "
                 f"{input_row_size}, {input_col_size}, {output_channel_size}, "
                 f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
-                f"{padding}, (float*){var_name}_weight, (float*){var_name}_bias);\n"
+                f"{padding}, {groups}, (float*){var_name}_weight, (float*){var_name}_bias);\n"
             )
         # elif getattr(self, "quantization_type") == DYNAMIC_QUANTIZATION_PER_TENSOR:
         #     layer_def = (

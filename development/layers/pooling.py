@@ -13,7 +13,7 @@ from torch import nn
 
 from .layer import Layer
 
-from ..utilis import (
+from ..utils import (
     QUANTIZATION_NONE,
     DYNAMIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_TENSOR,
@@ -41,9 +41,6 @@ class MaxPool2d(nn.MaxPool2d, Layer):
         Returns:
             Max pooled output tensor
         """
-        # Store input shape for later use in code generation
-        setattr(self, "input_shape", input.size())
-
         # return nn.functional.max_pool2d(
         #     input,
         #     self.kernel_size,
@@ -171,7 +168,7 @@ class MaxPool2d(nn.MaxPool2d, Layer):
     
 
     @torch.no_grad()
-    def convert_to_c(self, var_name):
+    def convert_to_c(self, var_name, input_shape):
         """Generate C code declarations for this layer
         
         Args:
@@ -180,7 +177,7 @@ class MaxPool2d(nn.MaxPool2d, Layer):
         Returns:
             Tuple of (header declaration, layer definition, parameter definition)
         """
-        input_channel_size, input_row_size, input_col_size = self.input_shape[1:]
+        input_channel_size, input_row_size, input_col_size = input_shape
         kernel_size = self.kernel_size
         stride = self.stride
         padding = self.padding

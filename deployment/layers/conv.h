@@ -52,6 +52,7 @@ private:
     uint32_t stride_row;         ///< Vertical stride
     uint32_t stride_col;         ///< Horizontal stride
     uint32_t padding;            ///< Padding type (0=VALID, 1=SAME)
+    uint32_t groups;
 
     // Weight and bias tensors
     const float* weight;         ///< Pointer to weight tensor
@@ -74,7 +75,7 @@ public:
      */
     Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
            uint32_t output_channel_size, int32_t kernel_row_size, uint32_t kernel_col_size,
-           uint32_t stride_row, uint32_t stride_col, uint32_t padding,
+           uint32_t stride_row, uint32_t stride_col, uint32_t padding, uint32_t groups,
            const float* weight, const float* bias);
 
     /**
@@ -116,6 +117,7 @@ private:
     uint32_t stride_row;         ///< Vertical stride
     uint32_t stride_col;         ///< Horizontal stride
     uint32_t padding;            ///< Padding type (0=VALID, 1=SAME)
+    uint32_t groups;
 
     // Quantization parameters
     const int8_t* weight;       ///< Pointer to quantized weight tensor
@@ -130,7 +132,7 @@ public:
      */
     Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
            uint32_t output_channel_size, int32_t kernel_row_size, uint32_t kernel_col_size,
-           uint32_t stride_row, uint32_t stride_col, uint32_t padding,
+           uint32_t stride_row, uint32_t stride_col, uint32_t padding, uint32_t groups,
            const int8_t* weight, float weight_scale, const float* bias);
 
     /**
@@ -172,6 +174,7 @@ private:
     uint32_t stride_row;         ///< Vertical stride
     uint32_t stride_col;         ///< Horizontal stride
     uint32_t padding;            ///< Padding type (0=VALID, 1=SAME)
+    uint32_t groups;
 
     // Quantization parameters
     float output_scale;          ///< Output tensor scale factor
@@ -194,7 +197,7 @@ public:
      */
     Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
            uint32_t output_channel_size, int32_t kernel_row_size, uint32_t kernel_col_size,
-           uint32_t stride_row, uint32_t stride_col, uint32_t padding,
+           uint32_t stride_row, uint32_t stride_col, uint32_t padding, uint32_t groups,
            float output_scale, int8_t output_zero_point, int8_t input_zero_point,
            const int8_t* weight, const int32_t* bias, float bias_scale);
 

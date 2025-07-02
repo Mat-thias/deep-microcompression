@@ -21,7 +21,7 @@ from torch.utils import data
 
 from ..layers.layer import Layer
 
-from ..utilis import (
+from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
     dequantize_per_tensor_assy,
@@ -90,13 +90,12 @@ class Sequential(nn.Sequential):
         # Saving the a test input data
         import random
         index = random.randint(0, input.size(0)-1)
-        # index = 0
+        index = 0
         # print(f"Using this {index}")
 
-        if not hasattr(self, "test_input"):
-            test_input = input[index].unsqueeze(dim=0).cpu()
+        test_input = input[index].unsqueeze(dim=0).cpu()
 
-            setattr(self, "test_input", test_input)
+        setattr(self, "test_input", test_input)
         
         # if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
         #                                            or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
@@ -663,12 +662,12 @@ class Sequential(nn.Sequential):
         # Track maximum tensor sizes at even/odd layers
         for i, layer in enumerate(self.layers.values(), start=1):
             output_shape = layer.get_output_tensor_shape(output_shape)
-
             if (i % 2 == 0):
                 max_output_even_size = max(max_output_even_size, output_shape.numel())
             else:
                 max_output_odd_size = max(max_output_odd_size, output_shape.numel())
         return max_output_even_size, max_output_odd_size
+
 
     @torch.no_grad()
     def convert_to_c(self, var_name: str, src_dir: str = "./", include_dir:str = "./") -> None:
@@ -724,13 +723,18 @@ class Sequential(nn.Sequential):
         )
         
         # Convert each layer to C
+        input_shape = self.input_shape[1:]
         for layer_name, layer in self.layers.items():
             if hasattr(layer, "convert_to_c"):
                 layers_def += f"    &{layer_name},\n"
-                layer_header, layer_def, layer_param_def = layer.convert_to_c(layer_name)
+
+                layer_header, layer_def, layer_param_def = layer.convert_to_c(layer_name, input_shape)
                 layers_header += layer_header
+
                 param_definition_file += layer_param_def
                 definition_file += layer_def 
+
+                input_shape = layer.get_output_tensor_shape(input_shape)
             else:
                 raise RuntimeError(f"The cpp conversion of {layer.__class__.__name__} has not been implemented!")
         
@@ -777,11 +781,11 @@ class Sequential(nn.Sequential):
         return
     
     @torch.no_grad
-    def test(self):
+    def test(self, device:str = "cpu"):
         # self.cpu()
         # if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
         #                                            or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
         #     return self(quantize_per_tensor_assy(
         #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantization_bitwidth))
         
-        return self(self.test_input.clone())
+        return self(self.test_input.clone().to(device))

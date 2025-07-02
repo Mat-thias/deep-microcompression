@@ -10,7 +10,7 @@ from typing import Optional
 
 import torch
 from torch import nn
-from ..utilis import (
+from ..utils import (
     STATIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_CHANNEL,
     QUANTIZATION_NONE,
@@ -41,8 +41,6 @@ class ReLU(nn.ReLU, Layer):
         Returns:
             Clamped output tensor according to current quantization mode
         """
-        # Store input shape for later use in code generation
-        setattr(self, "input_shape", input.size())
         
         # Determine minimum value based on quantization mode
         # min_val = 0  # Default for non-quantized case
@@ -142,7 +140,7 @@ class ReLU(nn.ReLU, Layer):
     
     
     @torch.no_grad()
-    def convert_to_c(self, var_name):
+    def convert_to_c(self, var_name, input_shape):
         """Generates C code declarations for this layer
         
         Args:
@@ -151,7 +149,7 @@ class ReLU(nn.ReLU, Layer):
         Returns:
             Tuple of (header declaration, layer definition, parameter definition)
         """
-        input_size = self.input_shape[1:].numel()
+        input_size = input_shape.numel()
 
         if getattr(self, "quantization_type", QUANTIZATION_NONE) != STATIC_QUANTIZATION_PER_TENSOR:
             layer_def = f"{self.__class__.__name__} {var_name}({input_size});\n"
