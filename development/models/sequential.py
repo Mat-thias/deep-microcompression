@@ -248,13 +248,6 @@ class Sequential(nn.Sequential):
 
 
 
-    def get_size_in_bits(self):
-        size = 0
-        for layer in self.layers.values():
-            size += layer.get_size_in_bits()
-        return size
-
-
     @torch.inference_mode()
     def evaluate(
         self, 
@@ -482,6 +475,12 @@ class Sequential(nn.Sequential):
         for layer in self.layers.values():
             layer.apply_quantization()
 
+
+    def get_size_in_bits(self):
+        size = 0
+        for layer in self.layers.values():
+            size += layer.get_size_in_bits()
+        return size
 
 
 
@@ -737,18 +736,6 @@ class Sequential(nn.Sequential):
     #     return input
 
 
-
-    # @torch.no_grad()
-    # def revert_param(self):
-    #     """Reset all parameters and quantization states"""
-    #     for layer in self.layers.values():
-    #         if hasattr(layer, "reset_buffer"): 
-    #             layer.reset_buffer()
-        
-    #     if hasattr(self, "quantization_type"): 
-    #         setattr(self, "quantization_type", QUANTIZATION_NONE)
-    #     return
-
     
 
     def get_weight_distributions(self, bins=256) -> Dict[str, Optional[torch.Tensor]]:
@@ -768,15 +755,6 @@ class Sequential(nn.Sequential):
                 weight_dist[name] = None
         return weight_dist
     
-
-
-
-    # def set_compression_parameters(self) -> None:
-    #     for layer in self.layers.values():
-    #         if hasattr(layer, "set_compression_parameters"):
-    #             layer.set_compression_parameters()
-
-    #     return
 
 
     @torch.no_grad()

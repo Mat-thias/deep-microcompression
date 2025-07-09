@@ -203,15 +203,15 @@ class Linear(Layer, nn.Linear):
         return
 
 
-    # def apply_quantization_external(self, weight, bias=None):
+    def apply_quantization_external(self, weight, bias=None):
           
-    #     if "quantization" not in self.__dict__["_dmc"]:
-    #         raise AttributeError("Layer must be prepared before applying compression")
+        if "quantization" not in self.__dict__["_dmc"]:
+            raise AttributeError("Layer must be prepared before applying compression")
         
-    #     type = self.__dict__["_dmc"]["quantization"]["type"]                     
+        type = self.__dict__["_dmc"]["quantization"]["type"]                     
 
-    #     if type == DYNAMIC_QUANTIZATION_PER_TENSOR:
-    #         return self.apply_dynamic_quantization_per_tensor_external(weight, bias) 
+        if type == DYNAMIC_QUANTIZATION_PER_TENSOR:
+            return self.apply_dynamic_quantization_per_tensor_external(weight), bias 
 
 
     def prepare_dynamic_quantization_per_tensor(self, bitwidth):
@@ -254,7 +254,7 @@ class Linear(Layer, nn.Linear):
             if "prune_channel" in self.__dict__["_dmc"]:
                 weight, bias = self.apply_prune_channel_external(weight, bias)
             if "quantization" in self.__dict__["_dmc"]:
-                weight, bias = self.apply_dynamic_quantization_per_tensor_external(weight, bias)
+                weight, bias = self.apply_quantization_external(weight, bias)
 
             return weight, bias
     

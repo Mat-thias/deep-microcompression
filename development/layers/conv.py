@@ -242,7 +242,7 @@ class Conv2d(Layer, nn.Conv2d):
         q_type = self.__dict__["_dmc"]["quantization"]["type"]                     
 
         if q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
-            return self.apply_dynamic_quantization_per_tensor_external(weight, bias) 
+            return self.apply_dynamic_quantization_per_tensor_external(weight), bias
         elif q_type == STATIC_QUANTIZATION_PER_TENSOR:
             return self.apply_static_quantization_per_tensor_external(weight, bias)
 
@@ -264,7 +264,7 @@ class Conv2d(Layer, nn.Conv2d):
         return
     
     @torch.no_grad()
-    def apply_dynamic_quantization_per_tensor_external(self, weight, bias=None):
+    def apply_dynamic_quantization_per_tensor_external(self, weight):
         weight_scale = self.__dict__["_dmc"]["quantization"]["weight_scale"]
         bitwidth = self.__dict__["_dmc"]["quantization"]["bitwidth"]
 
