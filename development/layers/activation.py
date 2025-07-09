@@ -57,12 +57,6 @@ class ReLU(Layer, nn.ReLU):
         return super().forward(input)
     
 
-    def get_size_in_bits(self):
-        if hasattr(self, "input_zero_point"):
-            return get_size_in_bits(self.input_zero_point)
-        return 0
-
-
     @torch.no_grad()
     def prepare_prune_channel(self, 
                      sparsity: float, 
@@ -156,6 +150,11 @@ class ReLU(Layer, nn.ReLU):
         pass
 
 
+    def get_size_in_bits(self):
+        if hasattr(self, "input_zero_point"):
+            return get_size_in_bits(self.input_zero_point)
+        return 0
+
 
     def get_compression_parameters(self):
         # Nothing to do 
@@ -221,12 +220,6 @@ class ReLU6(Layer, nn.ReLU6):
         
         return super().forward(input)
     
-
-    def get_size_in_bits(self):
-        if hasattr(self, "input_zero_point"):
-            return get_size_in_bits(self.input_zero_point)
-        return 0
-
 
     @torch.no_grad()
     def prepare_prune_channel(
@@ -310,6 +303,13 @@ class ReLU6(Layer, nn.ReLU6):
 
     def apply_static_quantization_per_tensor(self):
         pass
+
+
+
+    def get_size_in_bits(self):
+        if hasattr(self, "input_zero_point"):
+            return get_size_in_bits(self.input_zero_point)
+        return 0
 
 
     def get_compression_parameters(self):

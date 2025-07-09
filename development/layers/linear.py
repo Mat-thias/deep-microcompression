@@ -63,23 +63,6 @@ class Linear(Layer, nn.Linear):
         input = super().forward(input)
         return input
 
-    @torch.no_grad()
-    def get_size_in_bits(self):
-        
-        if self.bias is not None:
-            weight, bias = self.get_compression_parameters()
-        else:
-            weight = self.get_compression_parameters()
-
-        size = 0
-
-        size += get_size_in_bits(weight)
-
-        if self.bias is not None:
-            size += get_size_in_bits(bias)
-
-        return size
-
     
     @torch.no_grad()
     def prepare_prune_channel(
@@ -131,10 +114,8 @@ class Linear(Layer, nn.Linear):
 
     @torch.no_grad()
     def apply_prune_channel(self):
+        super().apply_prune_channel()
 
-        if "prune_channel" not in self.__dict__["_dmc"]:
-            raise AttributeError("Layer must be prepared before applying compression")
-        
         weight_mask_prev_channel = torch.zeros_like(self.weight)
         weight_mask_current_channel = torch.zeros_like(self.weight)
 
@@ -180,11 +161,6 @@ class Linear(Layer, nn.Linear):
         q_type,
     ):
         super().prepare_quantization(bitwidth, q_type)
-        # if bitwidth is None:
-        #     return
-        
-        if bitwidth is None:
-            return
 
         if q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
             self.prepare_dynamic_quantization_per_tensor(bitwidth)
@@ -243,10 +219,34 @@ class Linear(Layer, nn.Linear):
     
 
 
+    @torch.no_grad()
+    def get_size_in_bits(self):
+        
+        if self.bias is not None:
+            weight, bias = self.get_compression_parameters()
+        else:
+            weight = self.get_compression_parameters()
+
+        is_packed = False
+        bitwidth = None
+        if "quantization" in self.__dict__["_dmc"]:
+            is_packed = True
+            bitwidth = self.__dict__["_dmc"]["quantization"]["bitwidth"]
+
+
+        size = 0
+        size += get_size_in_bits(weight, is_packed=is_packed, bitwidth=bitwidth)
+
+        if self.bias is not None:
+            size += get_size_in_bits(bias, is_packed=is_packed, bitwidth=bitwidth)
+            
+        return size
+
+
 
     @torch.no_grad()
     def get_compression_parameters(self) -> Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-        
+
         if self.bias is not None:
             weight = self.weight
             bias = self.bias
@@ -260,7 +260,7 @@ class Linear(Layer, nn.Linear):
     
         weight = self.weight
 
-        if getattr(self, "pruned", False):
+        if "prune_channel" in self.__dict__["_dmc"]:
             weight = self.apply_prune_channel_external(weight)
         if "quantization" in self.__dict__["_dmc"]:
             weight = self.apply_dynamic_quantization_per_tensor_external(weight)

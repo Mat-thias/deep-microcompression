@@ -73,22 +73,6 @@ class Conv2d(Layer, nn.Conv2d):
         return input
     
 
-    def get_size_in_bits(self) -> int:
-        
-        size = 0
-        if self.bias is not None:
-            weight, bias = self.get_compression_parameters()
-        else:
-            weight = self.get_compression_parameters()
-
-        size += get_size_in_bits(weight)
-        if self.bias is not None:
-            size += get_size_in_bits(bias)
-
-        return size
-
-
-
     @torch.no_grad()
     def prepare_prune_channel(
         self, 
@@ -350,6 +334,30 @@ class Conv2d(Layer, nn.Conv2d):
         return weight_quant
 
 
+    def get_size_in_bits(self) -> int:
+        
+        size = 0
+        if self.bias is not None:
+            weight, bias = self.get_compression_parameters()
+        else:
+            weight = self.get_compression_parameters()
+
+        is_packed = False
+        bitwidth = None
+        if "quantization" in self.__dict__["_dmc"]:
+            is_packed = True
+            bitwidth = self.__dict__["_dmc"]["quantization"]["bitwidth"]
+
+
+        size = 0
+        size += get_size_in_bits(weight, is_packed=is_packed, bitwidth=bitwidth)
+
+        if self.bias is not None:
+            size += get_size_in_bits(bias, is_packed=is_packed, bitwidth=bitwidth)
+            
+
+        return size
+
 
 
     @torch.no_grad()
@@ -363,12 +371,11 @@ class Conv2d(Layer, nn.Conv2d):
                 weight, bias = self.apply_prune_channel_external(weight, bias)
             if "quantization" in self.__dict__["_dmc"]:
                 weight, bias = self.apply_quantization_external(weight, bias)
-
             return weight, bias
     
         weight = self.weight
 
-        if getattr(self, "pruned", False):
+        if "prune_channel" in self.__dict__["_dmc"]:
             weight = self.apply_prune_channel_external(weight)
         if "quantization" in self.__dict__["_dmc"]:
             weight = self.apply_quantization_external(weight)
