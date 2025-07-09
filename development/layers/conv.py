@@ -52,9 +52,6 @@ class Conv2d(Layer, nn.Conv2d):
         if "padding" in kwargs:
             assert kwargs["padding"] == 0, "Use pad instead of padding to pad input"
         super().__init__(*args, **kwargs)
-        print("in conv")
-
-
 
 
 
@@ -232,9 +229,8 @@ class Conv2d(Layer, nn.Conv2d):
         
         super().apply_quantization()
 
-        type = self.__dict__["_dmc"]["quantization"]["type"]  
-        print("TYpe in conv", type)                   
-        if type == DYNAMIC_QUANTIZATION_PER_TENSOR:
+        q_type = self.__dict__["_dmc"]["quantization"]["type"]  
+        if q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
             return self.apply_dynamic_quantization_per_tensor() 
 
 
@@ -243,11 +239,11 @@ class Conv2d(Layer, nn.Conv2d):
         if "quantization" not in self.__dict__["_dmc"]:
             raise AttributeError("Layer must be prepared before applying compression")
         
-        type = self.__dict__["_dmc"]["quantization"]["type"]                     
+        q_type = self.__dict__["_dmc"]["quantization"]["type"]                     
 
-        if type == DYNAMIC_QUANTIZATION_PER_TENSOR:
+        if q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
             return self.apply_dynamic_quantization_per_tensor_external(weight, bias) 
-        elif type == STATIC_QUANTIZATION_PER_TENSOR:
+        elif q_type == STATIC_QUANTIZATION_PER_TENSOR:
             return self.apply_static_quantization_per_tensor_external(weight, bias)
 
 

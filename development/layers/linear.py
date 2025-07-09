@@ -177,16 +177,16 @@ class Linear(Layer, nn.Linear):
     def prepare_quantization(
         self, 
         bitwidth,
-        type,
+        q_type,
     ):
-        super().prepare_quantization(bitwidth, type)
+        super().prepare_quantization(bitwidth, q_type)
         # if bitwidth is None:
         #     return
         
         if bitwidth is None:
             return
 
-        if type == DYNAMIC_QUANTIZATION_PER_TENSOR:
+        if q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
             self.prepare_dynamic_quantization_per_tensor(bitwidth)
 
 
@@ -196,8 +196,8 @@ class Linear(Layer, nn.Linear):
         if self.__dict__["_dmc"]["quantization"]["bitwidth"] is None:
             return
 
-        type = self.__dict__["_dmc"]["quantization"]["type"]                     
-        if type == DYNAMIC_QUANTIZATION_PER_TENSOR:
+        q_type = self.__dict__["_dmc"]["quantization"]["type"]                     
+        if q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
             self.apply_dynamic_quantization_per_tensor() 
 
         return

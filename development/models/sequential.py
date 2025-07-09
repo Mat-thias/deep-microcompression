@@ -288,6 +288,17 @@ class Sequential(nn.Sequential):
 
         return metric_val / data_len
     
+
+
+    def compress(
+            self,
+            config,
+            input_shape
+    ):
+        model = self.prepare_compression(config, input_shape)
+        model.apply_compression()
+
+        return model
     
     def prepare_compression(
             self,
@@ -322,8 +333,9 @@ class Sequential(nn.Sequential):
 
                 elif configuration_type == "quantization":
                     quantization_config = config.get("quantization")
+                    q_type = quantization_config["type"]
 
-                    if quantization_config["type"] != DYNAMIC_QUANTIZATION_PER_TENSOR:
+                    if q_type != QUANTIZATION_NONE and q_type != DYNAMIC_QUANTIZATION_PER_TENSOR:
                         raise ValueError(f"Invalid quantization type")
                     
                     if quantization_config["bitwidth"] is not None and quantization_config["bitwidth"] > 8:
@@ -332,8 +344,6 @@ class Sequential(nn.Sequential):
                 else:
                     raise ValueError(f"Invalid configuration type of {configuration_type}")
                 
-            print("Config", config)
-                    
             return True
         
         if not is_config_valid():
@@ -350,7 +360,7 @@ class Sequential(nn.Sequential):
             elif compression_type == "quantization":
                 model.prepare_quantization(
                     bitwidth = compression_type_param["bitwidth"],
-                    type = compression_type_param["type"]
+                    q_type = compression_type_param["type"]
                 )
             else:
                 raise NotImplementedError(f"Compression of type {compression_type} not implemented!")
@@ -373,16 +383,6 @@ class Sequential(nn.Sequential):
             # print("compression", compression_type)
 
         return
-    
-    def compress(
-            self,
-            config,
-            input_shape
-    ):
-        model = self.prepare_compression(config, input_shape)
-        model.apply_compression()
-
-        return model
     
     
 
@@ -435,21 +435,20 @@ class Sequential(nn.Sequential):
     def prepare_quantization(
         self, 
         bitwidth,
-        type,
+        q_type,
         input_batch_real:Optional[torch.Tensor] = None
     ):
-        
-        # if bitwidth in None:
-        #     return
-
         self.__dict__["_dmc"]["quantization"] = dict()
+        self.__dict__["_dmc"]["quantization"]["type"] = q_type
 
+        if q_type == QUANTIZATION_NONE:
+            return
         
-        if type == DYNAMIC_QUANTIZATION_PER_TENSOR:  
+        elif q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:  
             for layer in self.layers.values():
-                layer.prepare_quantization(bitwidth, type)
+                layer.prepare_quantization(bitwidth, q_type)
 
-        elif type == STATIC_QUANTIZATION_PER_TENSOR: 
+        elif q_type == STATIC_QUANTIZATION_PER_TENSOR: 
             if input_batch_real is None:
                 raise ValueError(f"pass a calibration prarmeter")    
             input_scale, input_zero_point = get_quantize_scale_zero_point_per_tensor_assy(input_batch_real, bitwidth)
@@ -475,18 +474,13 @@ class Sequential(nn.Sequential):
     ):
         if "quantization" not in self.__dict__["_dmc"]:
             raise AttributeError("Layer must be prepared before applying compression")
-    
+        
+        q_type = self.__dict__["_dmc"]["quantization"]["type"]
+        if q_type == QUANTIZATION_NONE:
+            return
+        
         for layer in self.layers.values():
-            layer.apply_dynamic_quantization_per_tensor()
-
-        # print("I fuclkalkf")
-        # if type == DYNAMIC_QUANTIZATION_PER_TENSOR:            
-        #     print("<<<<<<<<<<<I fuclkalkf")
-        #     for layer in self.layers.values():
-        #         layer.apply_dynamic_quantization_per_tensor()
-        # elif type == STATIC_QUANTIZATION_PER_TENSOR:            
-        #     for layer in self.layers.values():
-        #         layer.apply_static_quantization_per_tensor()
+            layer.apply_quantization()
 
 
 
