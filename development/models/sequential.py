@@ -75,6 +75,7 @@ class Sequential(nn.Sequential):
             self.layers[name] = layer
 
 
+
     def forward(self, input):
         """Forward pass with quantization support
         
