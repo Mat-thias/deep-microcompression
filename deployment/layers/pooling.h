@@ -58,6 +58,49 @@ public:
     void forward(float* input, float* output);
 };
 
+
+
+
+class AvgPool2d : public Layer {
+private:
+    uint32_t input_channel_size;  ///< Number of input channels
+    uint32_t input_row_size;      ///< Height of input feature map
+    uint32_t input_col_size;      ///< Width of input feature map
+
+    uint32_t output_row_size;     ///< Height of output feature map
+    uint32_t output_col_size;     ///< Width of output feature map
+
+    uint32_t kernel_size;         ///< Size of pooling window (square)
+    uint32_t stride;              ///< Stride for pooling operation
+    uint32_t padding;             ///< Padding size around input
+
+public:
+    /**
+     * @brief Constructor for floating-point AvgPool2d layer.
+     * 
+     * @param input_channel_size Number of input channels
+     * @param input_row_size Height of input feature map
+     * @param input_col_size Width of input feature map
+     * @param kernel_size Size of pooling window
+     * @param stride Stride for pooling operation
+     * @param padding Padding size around input
+     */
+    AvgPool2d(uint32_t input_channel_size, 
+              uint32_t input_row_size, 
+              uint32_t input_col_size,
+              uint32_t kernel_size, 
+              uint32_t stride, 
+              uint32_t padding);
+
+    /**
+     * @brief Forward pass for floating-point max pooling.
+     * 
+     * @param input Pointer to input tensor (float)
+     * @param output Pointer to output tensor (float)
+     */
+    void forward(float* input, float* output);
+};
+
 #else // STATIC_QUANTIZATION_PER_TENSOR
 
 /**

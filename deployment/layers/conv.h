@@ -22,6 +22,8 @@
 
 #include "layer.h"
 
+
+
 #if defined(QUANTIZATION_NONE) || (!defined(DYNAMIC_QUANTIZATION_PER_TENSOR) && !defined(DYNAMIC_QUANTIZATION_PER_CHANNEL) \
                                && !defined(STATIC_QUANTIZATION_PER_TENSOR) && !defined(STATIC_QUANTIZATION_PER_CHANNEL))
 
@@ -51,7 +53,7 @@ private:
     // Operation parameters
     uint32_t stride_row;         ///< Vertical stride
     uint32_t stride_col;         ///< Horizontal stride
-    uint32_t padding;            ///< Padding type (0=VALID, 1=SAME)
+    Padding_t  padding;            ///< Padding type (0=VALID, 1=SAME)
     uint32_t groups;
 
     // Weight and bias tensors
@@ -75,7 +77,7 @@ public:
      */
     Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
            uint32_t output_channel_size, int32_t kernel_row_size, uint32_t kernel_col_size,
-           uint32_t stride_row, uint32_t stride_col, uint32_t padding, uint32_t groups,
+           uint32_t stride_row, uint32_t stride_col, Padding_t padding, uint32_t groups,
            const float* weight, const float* bias);
 
     /**

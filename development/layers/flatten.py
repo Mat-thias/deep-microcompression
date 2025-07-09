@@ -14,11 +14,12 @@ from torch import nn
 from .layer import Layer
 
 from ..utils import (
+    DYNAMIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_TENSOR,
     STATIC_QUANTIZATION_PER_CHANNEL,
 )
 
-class Flatten(nn.Flatten, Layer):
+class Flatten(Layer, nn.Flatten):
     """Quantization-aware Flatten layer that maintains:
         - Standard flatten functionality
         - Quantization state pass-through
@@ -42,7 +43,6 @@ class Flatten(nn.Flatten, Layer):
         Returns:
             Flattened tensor according to start_dim and end_dim
         """
-        setattr(self, "input_shape", input.size())
         
         # return input.flatten(self.start_dim, self.end_dim)
         return super().forward(input)
@@ -53,11 +53,14 @@ class Flatten(nn.Flatten, Layer):
         return 0
 
     @torch.no_grad()
-    def prune_channel(self, 
-                     sparsity: float, 
-                     keep_prev_channel_index: Union[torch.Tensor, None], 
-                     is_output_layer: bool = False, 
-                     metric: str = "l2"):
+    def prepare_prune_channel(
+        self, 
+        sparsity: float, 
+        keep_prev_channel_index: Union[torch.Tensor, None], 
+        input_shape: torch.Size,
+        is_output_layer: bool = False, 
+        metric: str = "l2"
+    ):
         """Coordinate channel pruning between layers by adjusting channel indices
         
         Args:
@@ -69,17 +72,18 @@ class Flatten(nn.Flatten, Layer):
         Returns:
             Adjusted channel indices accounting for flatten operation
         """
-        setattr(self, "pruned", True)
+        super().prepare_prune_channel()
 
         # Calculate number of elements per channel in original input
-        channel_numel = self.input_shape[2:].numel()
+        channel_numel = input_shape[1:].numel()
 
-        # if is_output_layer:
-        #     # Output layer doesn't prune, just pass through
-        #     keep_current_channel_index = None
-        #     return keep_current_channel_index
+        if is_output_layer:
+            pass
+            # Output layer doesn't prune, just pass through
 
         # Calculate start positions for each kept channel
+        if keep_prev_channel_index is None:
+            keep_prev_channel_index = torch.arange(input_shape[0])
         start_positions = keep_prev_channel_index * channel_numel
         channel_elements_index = torch.arange(channel_numel)
 
@@ -87,6 +91,34 @@ class Flatten(nn.Flatten, Layer):
         keep_current_channel_index = start_positions.view(-1, 1) + channel_elements_index
 
         return keep_current_channel_index.flatten()
+    
+    def apply_prune_channel(self):
+        super().apply_prune_channel()
+        # Nothing to do
+
+
+    def prepare_quantization(
+        self, 
+        bitwidth,
+        type,
+    ):
+        super().prepare_quantization(bitwidth, type)
+        #Nothing to do
+        pass
+
+
+    def apply_quantization(self):
+        super().apply_quantization()
+        #Nothing to do
+        pass
+
+    def prepare_dynamic_quantization_per_tensor(self, bitwidth):
+        #Nothing to do
+        pass
+
+    def apply_dynamic_quantization_per_tensor(self):
+        #Nothing to do
+        pass
 
     @torch.no_grad()
     def static_quantize_per_tensor(self,
@@ -138,9 +170,13 @@ class Flatten(nn.Flatten, Layer):
 
         return output_batch_real, output_batch_quant, input_scale, input_zero_point
 
+    def get_compression_parameters(self):
+        # Nothing to do
+        pass
+
     def get_output_tensor_shape(self, input_shape):
 
-        return torch.Size((input_shape.numel(),))
+        return torch.Size((input_shape.numel(),)), torch.Size((input_shape.numel(),))
     
 
     @torch.no_grad()

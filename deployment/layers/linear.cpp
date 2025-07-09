@@ -35,12 +35,17 @@ Linear::Linear(uint32_t output_size, uint32_t input_size,
  */
 void Linear::forward(float* input, float* output) {
     for (uint32_t j = 0; j < this->output_size; j++) {
-        output[j] = 0;
+        if (this->bias) {
+            output[j] =  this->bias[j];
+        }
+        else {
+            output[j] =  0;
+        }
         // Matrix-vector multiplication
         for (uint32_t i = 0; i < this->input_size; i++) {
             output[j] += input[i] * this->weight[(j * this->input_size) + i];
         }
-        output[j] += this->bias[j];  // Add bias
+        // output[j] += this->bias[j];  // Add bias
     }
 }
 

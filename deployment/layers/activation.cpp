@@ -36,6 +36,19 @@ void ReLU::forward(float* input, float* output) {
     }
 }
 
+
+
+ReLU6::ReLU6(uint32_t input_size) {
+    this->input_size = input_size;
+}
+
+void ReLU6::forward(float* input, float* output) {
+    // Apply ReLU6 function element-wise
+    for (uint32_t i = 0; i < this->input_size; i++) {
+        output[i] = (input[i] < 0) ? 0 : (input[i] > 6) ? 6 : input[i];
+    }
+}
+
 #else // STATIC_QUANTIZATION_PER_TENSOR
 
 /**

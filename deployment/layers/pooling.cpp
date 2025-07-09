@@ -78,6 +78,56 @@ void MaxPool2d::forward(float* input, float* output) {
     }
 }
 
+
+
+AvgPool2d::AvgPool2d(uint32_t input_channel_size, uint32_t input_row_size, 
+                    uint32_t input_col_size, uint32_t kernel_size, 
+                    uint32_t stride, uint32_t padding) {
+    // Store layer parameters
+    this->input_channel_size = input_channel_size;
+    this->input_row_size = input_row_size;
+    this->input_col_size = input_col_size;
+    this->kernel_size = kernel_size;
+    this->stride = stride;
+    this->padding = padding;
+
+    // Calculate output dimensions
+    this->output_row_size = ((this->input_row_size - this->kernel_size) / this->stride) + 1;
+    this->output_col_size = ((this->input_col_size - this->kernel_size) / this->stride) + 1;
+}
+
+void AvgPool2d::forward(float* input, float* output) {
+    float total;
+    uint8_t pool_size = this->kernel_size * this->kernel_size;
+
+
+    // Loop over all channels
+    for (uint32_t n = 0; n < this->input_channel_size; n++) {
+        // Loop over output spatial dimensions
+        for (uint32_t m = 0; m < this->output_row_size; m++) {
+            for (uint32_t l = 0; l < this->output_col_size; l++) {
+                // Initialize max value to smallest possible float
+                total = 0;
+
+                // Iterate through pooling window
+                for (uint32_t j = 0; j < this->kernel_size; j++) {
+                    for (uint32_t i = 0; i < this->kernel_size; i++) {
+                        // Calculate input index
+                        uint32_t input_idx = (n * this->input_row_size * this->input_col_size) +
+                                          ((m * this->stride + j) * this->input_col_size) +
+                                          (l * this->stride + i);
+                        total += input[input_idx];
+                    }
+                }
+
+                uint32_t output_idx = (n * this->output_row_size * this->output_col_size) +
+                                     (m * this->output_col_size) + l;
+                output[output_idx] = total / pool_size;
+            }
+        }
+    }
+}
+
 #else // STATIC_QUANTIZATION_PER_TENSOR
 
 /**

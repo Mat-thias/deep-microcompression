@@ -11,5 +11,4 @@
 #include "layers/linear.h"
 #include "layers/pooling.h"
 
-
 #endif // DEEP_MICROCOMPRESSION

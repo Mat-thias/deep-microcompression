@@ -12,6 +12,20 @@
 #include <float.h>   // For floating-point constants
 #include <math.h>    // For math operations
 
+
+struct Padding_t {
+    uint8_t padding_left;
+    uint8_t padding_right;
+    uint8_t padding_top;
+    uint8_t padding_bottom;
+
+    bool is_padded() {
+        return (this->padding_bottom + this->padding_top + 
+                this->padding_left + this->padding_right) > 0;
+    }
+};
+
+
 #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
 
 /**

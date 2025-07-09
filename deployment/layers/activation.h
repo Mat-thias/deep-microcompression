@@ -45,6 +45,27 @@ public:
     void forward(float* input, float* output);
 };
 
+
+
+class ReLU6 : public Layer {
+private:
+    uint32_t input_size;  ///< Number of elements in input tensor
+    
+public:
+    /**
+     * @brief Constructor for floating-point ReLU
+     * @param input_size Number of elements in input tensor
+     */
+    ReLU6(uint32_t input_size);
+
+    /**
+     * @brief Forward pass for floating-point ReLU
+     * @param input Pointer to input tensor (float)
+     * @param output Pointer to output tensor (float)
+     */
+    void forward(float* input, float* output);
+};
+
 #else // STATIC_QUANTIZATION_PER_TENSOR
 
 /**
