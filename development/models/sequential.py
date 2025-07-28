@@ -343,7 +343,7 @@ class Sequential(nn.Sequential):
         for compression_type, compression_type_param in config.items():
             if compression_type == "prune_channel":
 
-                if config["prune_channel"]["sparsity"] > 0.:
+                if not isinstance(config["prune_channel"]["sparsity"], float) or config["prune_channel"]["sparsity"] != 0.:
 
                     def prune_channel_layer(layer):
                         layer.is_pruned_channel = True
