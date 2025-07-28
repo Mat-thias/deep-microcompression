@@ -95,43 +95,16 @@ class Quantize:
 
         self.base = base
 
-        # if base_accumulator is None:
-        #     if affine == AFFINE_ASSYMMETRIC:
-        #         self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base]), sum([b.zero_point for b in base])
-        #     else:
-        #         self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base])
-        # else:
-        #     self.base_accumulator = base_accumulator
-
-        if base_accumulator is None:
-            def scale_zero_point_accumulator(
-                x:torch.Tensor, 
-                bitwidth: int, 
-                base: Iterable["Quantize"]
-            ):
-                scale = 1
-                for b in base:
-                    scale *= b.scale
-
-                zero_point = 0
-                for b in base:
-                    zero_point += b.zero_point
-                return scale, zero_point
-
-            def scale_accumulator(
-                x:torch.Tensor, 
-                bitwidth: int, 
-                base: Iterable["Quantize"]
-            ):
-                scale = 1
-                for b in base:
-                    scale *= b.scale
-                return scale
-            
-            self.base_accumulator = scale_zero_point_accumulator if scale_type == QuantizationScaleType.ASSYMMETRIC \
-                                    else scale_accumulator
-        else:
-            self.base_accumulator = base_accumulator
+        if base is not None:
+            if base_accumulator is None:
+                if scale_type == QuantizationScaleType.ASSYMMETRIC:
+                    print(base)
+                    self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base]), sum([b.zero_point for b in base])
+                else:
+                    self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base])
+            else:
+                self.base_accumulator = base_accumulator
+                
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         if self.module.training:
