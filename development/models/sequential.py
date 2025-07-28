@@ -356,11 +356,6 @@ class Sequential(nn.Sequential):
                     # layer.quantize_type = config["quantize"]["type"]
 
                 if config["quantize"]["scheme"] != QuantizationScheme.NONE:
-
-##############################################################################################################
-                    # if config["quantize"]["scheme"] == QuantizationScheme.STATIC and config["quantize"]["granularity"] == QuantizationGranularity.PER_CHANNEL:
-                    #     raise ValueError
-##############################################################################################################
                     
                     if config["quantize"]["scheme"] == QuantizationScheme.STATIC and calibration_data is None:
                         raise ValueError(f"Pass a calibration data when doing static quantization!")
