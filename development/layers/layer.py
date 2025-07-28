@@ -81,7 +81,8 @@ class Quantize:
         granularity: QuantizationGranularity, 
         scale_type: QuantizationScaleType, 
         base: Optional[Iterable["Quantize"]] = None, 
-        base_accumulator: Optional[Callable[[torch.Tensor, int, Iterable["Quantize"]], torch.Tensor]] = None
+        base_accumulator: Optional[Callable[[torch.Tensor, int, Iterable["Quantize"]], torch.Tensor]] = None,
+        prune_channel: Optional["Prune_Channel"] = None
     ) -> None:
 
         self.module = module
@@ -104,6 +105,8 @@ class Quantize:
                     self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base])
             else:
                 self.base_accumulator = base_accumulator
+
+        self.prune_channel = prune_channel
 
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
@@ -128,13 +131,23 @@ class Quantize:
                 
 
     def fake_apply(self, x: torch.Tensor) -> torch.Tensor:
+               
+        scale = self.scale
+        zero_point = self.zero_point
+
+        if self.granularity == QuantizationGranularity.PER_CHANNEL and self.module.is_pruned_channel:
+            scale = prune_channel.fake_apply(scale)
+            scale[scale == 0.] = 1.
+            if self.scale_type == QuantizationScaleType.ASSYMMETRIC: 
+                zero_point = prune_channel.fake_apply(zero_point) 
+        
         if self.scale_type == QuantizationScaleType.SYMMETRIC:
             return fake_quantize_per_tensor_sy(x, self.scale, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
                    fake_quantize_per_channel_sy(x, self.scale, self.bitwidth)
         return fake_quantize_per_tensor_assy(x, self.scale, self.zero_point, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
                fake_quantize_per_channel_assy(x, self.scale, self.zero_point, self.bitwidth)
 
-    def apply(self, x: torch.Tensor, prune_channel: Optional["Prune_Channel"] = None) -> torch.Tensor:
+    def apply(self, x: torch.Tensor) -> torch.Tensor:
         dtype = torch.int32 if self.bitwidth > 8 else torch.int8
         
         scale = self.scale

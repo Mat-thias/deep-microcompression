@@ -18,7 +18,6 @@ import torch
 from torch import nn
 
 from .layer import Layer, Prune_Channel, Quantize
-# from ..compressor import Prune_Channel
 
 from ..utils import (
     convert_tensor_to_bytes_var,
@@ -139,9 +138,14 @@ class Linear(Layer, nn.Linear):
 
     @torch.no_grad()
     def init_quantize(self, bitwidth, scheme, granularity):
-        setattr(self, "weight_quantize", Quantize(
-            self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC
-        ))
+        if not self.is_pruned_channel:
+            setattr(self, "weight_quantize", Quantize(
+                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC
+            ))
+        else:
+            setattr(self, "weight_quantize", Quantize(
+                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, prune_channel=self.weight_prune_channel
+            ))
 
         if scheme == QuantizationScheme.STATIC:
             setattr(self, "input_quantize", Quantize(
@@ -152,16 +156,24 @@ class Linear(Layer, nn.Linear):
             ))
 
         if self.bias is not None:
-            if scheme == QuantizationScheme.DYNAMIC:
-                setattr(self, "bias_quantize", Quantize(
-                    self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
-                ))
-            elif scheme == QuantizationScheme.STATIC:
-                setattr(self, "bias_quantize", Quantize(
-                    self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize]
-                ))                
+            if not self.is_pruned_channel:
+                if scheme == QuantizationScheme.DYNAMIC:
+                    setattr(self, "bias_quantize", Quantize(
+                        self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
+                    ))
+                elif scheme == QuantizationScheme.STATIC:
+                    setattr(self, "bias_quantize", Quantize(
+                        self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize]
+                    ))
             else:
-                raise
+                if scheme == QuantizationScheme.DYNAMIC:
+                    setattr(self, "bias_quantize", Quantize(
+                        self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize], prune_channel=self.bias_prune_channel
+                    ))
+                elif scheme == QuantizationScheme.STATIC:
+                    setattr(self, "bias_quantize", Quantize(
+                        self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize], prune_channel=self.bias_prune_channel
+                    ))
 
         # calibration
         if scheme == QuantizationScheme.DYNAMIC:
@@ -206,19 +218,10 @@ class Linear(Layer, nn.Linear):
                     bias = self.bias_prune_channel.apply(bias)
 
             if self.is_quantized:
-                if not self.is_pruned_channel:
-
                     weight = self.weight_quantize.apply(weight)
                     if self.bias is not None:
                         bias = self.bias_quantize.apply(bias)
                     
-
-                else:
-                    weight = self.weight_quantize.apply(weight, self.weight_prune_channel)
-                    if self.bias is not None:
-                        bias = self.bias_quantize.apply(bias, self.weight_prune_channel)
-                    
-
         return weight, bias
 
 

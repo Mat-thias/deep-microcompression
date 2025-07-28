@@ -300,6 +300,8 @@ class Sequential(nn.Sequential):
                     sparsity = prune_channel_config.get("sparsity")
 
                     if isinstance(sparsity, float):
+                        if sparsity == 0.0:
+                            continue
                         layer_sparsity = sparsity
                         sparsity = OrderedDict()
                         for name in self.layers.keys():
@@ -340,14 +342,16 @@ class Sequential(nn.Sequential):
               
         for compression_type, compression_type_param in config.items():
             if compression_type == "prune_channel":
-                
-                def prune_channel_layer(layer):
-                    layer.is_pruned_channel = True
 
-                model.apply(prune_channel_layer)
-                model.is_pruned_channel = True
+                if config["prune_channel"]["sparsity"] > 0.:
 
-                model.init_prune_channel()
+                    def prune_channel_layer(layer):
+                        layer.is_pruned_channel = True
+
+                    model.apply(prune_channel_layer)
+                    model.is_pruned_channel = True
+
+                    model.init_prune_channel()
 
             elif compression_type == "quantize":
                 def quantize_layer(layer):
