@@ -13,14 +13,6 @@ from torch import nn
 
 from .layer import Layer
 
-from ..utils import (
-    QUANTIZATION_NONE,
-    DYNAMIC_QUANTIZATION_PER_TENSOR,
-    STATIC_QUANTIZATION_PER_TENSOR,
-    STATIC_QUANTIZATION_PER_CHANNEL,
-)
-
-
 class MaxPool2d(Layer, nn.MaxPool2d):
     """Quantization-aware MaxPool2d layer with support for:
         - Standard max pooling operation
@@ -41,22 +33,10 @@ class MaxPool2d(Layer, nn.MaxPool2d):
         Returns:
             Max pooled output tensor
         """
-        # return nn.functional.max_pool2d(
-        #     input,
-        #     self.kernel_size,
-        #     self.stride,
-        #     self.padding,
-        #     self.dilation,
-        #     ceil_mode=self.ceil_mode,
-        #     return_indices=self.return_indices,
-        # )
         return super().forward(input)
 
-    def get_size_in_bits(self):
-        return 0
-
     @torch.no_grad()
-    def prepare_prune_channel(
+    def init_prune_channel(
         self, 
         sparsity: float, 
         keep_prev_channel_index: Union[torch.Tensor, None], 
@@ -75,114 +55,17 @@ class MaxPool2d(Layer, nn.MaxPool2d):
         Returns:
             Original channel indices (no pruning implemented)
         """
-        super().prepare_prune_channel()
+        super().init_prune_channel()
         # Nothing to do
         return keep_prev_channel_index
 
 
-    def apply_prune_channel(self):
-        super().apply_prune_channel()
+    def init_quantize(self, bitwidth, scheme, granularity):
         # Nothing to do
         pass
 
-    
-    def prepare_quantization(
-        self, 
-        bitwidth,
-        type,
-    ):
-        super().prepare_quantization(bitwidth, type)
-        # Nothing to do
-        pass
-
-
-    def apply_quantization(self):
-        super().apply_quantization()
-        # Nothing to do
-        pass
-
-    def prepare_dynamic_quantization_per_tensor(self, bitwidth):
-        # Nothing to do
-        pass
-
-    def apply_dynamic_quantization_per_tensor(self):
-        # Nothing to do
-        pass
-
-
-    @torch.no_grad()
-    def static_quantize_per_tensor(self,
-                                 input_batch_real: torch.Tensor,
-                                 input_batch_quant: torch.Tensor,
-                                 input_scale: torch.Tensor,
-                                 input_zero_point: torch.Tensor,
-                                 bitwidth: int = 8):
-        """Configure static per-tensor quantization for MaxPool
-        
-        Args:
-            input_batch_real: FP32 input samples
-            input_batch_quant: Quantized input samples
-            input_scale: Input quantization scale
-            input_zero_point: Input quantization zero point
-            bitwidth: Quantization bitwidth (unused)
-            
-        Returns:
-            Tuple of (real_output, quant_output, input_scale, input_zero_point)
-        """
-        setattr(self, "quantization_type", STATIC_QUANTIZATION_PER_TENSOR)
-
-        # Apply MaxPool in real (float) domain
-        output_batch_real = torch.nn.functional.max_pool2d(
-            input_batch_real,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding
-        )
-
-        # Apply MaxPool in quantized domain - same parameters
-        output_batch_quant = torch.nn.functional.max_pool2d(
-            input_batch_quant,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding
-        )
-
-        return output_batch_real, output_batch_quant, input_scale, input_zero_point
-
-    @torch.no_grad()
-    def static_quantize_per_channel(self,
-                                  input_batch_real: torch.Tensor,
-                                  input_batch_quant: torch.Tensor,
-                                  input_scale: torch.Tensor,
-                                  input_zero_point: torch.Tensor,
-                                  bitwidth: int = 8):
-        """Configure static per-channel quantization for MaxPool
-        
-        Args:
-            Same as static_quantize_per_tensor
-            
-        Returns:
-            Same as static_quantize_per_tensor
-        """
-        setattr(self, "quantization_type", STATIC_QUANTIZATION_PER_CHANNEL)
-
-        # Apply MaxPool in real (float) domain
-        output_batch_real = torch.nn.functional.max_pool2d(
-            input_batch_real,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding
-        )
-
-        # Apply MaxPool in quantized domain - same parameters
-        output_batch_quant = torch.nn.functional.max_pool2d(
-            input_batch_quant,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding
-        )
-
-        return output_batch_real, output_batch_quant, input_scale, input_zero_point
+    def get_size_in_bits(self):
+        return 0
 
 
     def get_compression_parameters(self):
@@ -250,22 +133,10 @@ class AvgPool2d(Layer, nn.AvgPool2d):
         Returns:
             Max pooled output tensor
         """
-        # return nn.functional.max_pool2d(
-        #     input,
-        #     self.kernel_size,
-        #     self.stride,
-        #     self.padding,
-        #     self.dilation,
-        #     ceil_mode=self.ceil_mode,
-        #     return_indices=self.return_indices,
-        # )
         return super().forward(input)
 
-    def get_size_in_bits(self):
-        return 0
-
     @torch.no_grad()
-    def prepare_prune_channel(
+    def init_prune_channel(
         self, 
         sparsity: float, 
         keep_prev_channel_index: Union[torch.Tensor, None], 
@@ -284,39 +155,19 @@ class AvgPool2d(Layer, nn.AvgPool2d):
         Returns:
             Original channel indices (no pruning implemented)
         """
-        super().prepare_prune_channel()
+        super().init_prune_channel()
         # Nothing to do
         return keep_prev_channel_index
 
 
-    def apply_prune_channel(self):
-        super().apply_prune_channel()
-        # Nothing to do
-        pass
-
-    
-    def prepare_quantization(
-        self, 
-        bitwidth,
-        type,
-    ):
-        super().prepare_quantization(bitwidth, type)
+    def init_quantize(self, bitwidth, scheme, granularity):
         # Nothing to do
         pass
 
 
-    def apply_quantization(self):
-        super().apply_quantization()
-        # Nothing to do
-        pass
+    def get_size_in_bits(self):
+        return 0
 
-    def prepare_dynamic_quantization_per_tensor(self, bitwidth):
-        # Nothing to do
-        pass
-
-    def apply_dynamic_quantization_per_tensor(self):
-        # Nothing to do
-        pass
 
     def get_compression_parameters(self):
         #Nothing to do

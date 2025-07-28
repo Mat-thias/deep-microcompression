@@ -13,12 +13,6 @@ from torch import nn
 
 from .layer import Layer
 
-from ..utils import (
-    DYNAMIC_QUANTIZATION_PER_TENSOR,
-    STATIC_QUANTIZATION_PER_TENSOR,
-    STATIC_QUANTIZATION_PER_CHANNEL,
-)
-
 class Flatten(Layer, nn.Flatten):
     """Quantization-aware Flatten layer that maintains:
         - Standard flatten functionality
@@ -49,11 +43,8 @@ class Flatten(Layer, nn.Flatten):
     
 
 
-    def get_size_in_bits(self):
-        return 0
-
     @torch.no_grad()
-    def prepare_prune_channel(
+    def init_prune_channel(
         self, 
         sparsity: float, 
         keep_prev_channel_index: Union[torch.Tensor, None], 
@@ -72,7 +63,7 @@ class Flatten(Layer, nn.Flatten):
         Returns:
             Adjusted channel indices accounting for flatten operation
         """
-        super().prepare_prune_channel()
+        super().init_prune_channel()
 
         # Calculate number of elements per channel in original input
         channel_numel = input_shape[1:].numel()
@@ -85,90 +76,21 @@ class Flatten(Layer, nn.Flatten):
         if keep_prev_channel_index is None:
             keep_prev_channel_index = torch.arange(input_shape[0])
         start_positions = keep_prev_channel_index * channel_numel
-        channel_elements_index = torch.arange(channel_numel)
+        channel_elements_index = torch.arange(channel_numel).to(start_positions.device)
 
         # Generate indices for all elements in kept channels
         keep_current_channel_index = start_positions.view(-1, 1) + channel_elements_index
 
         return keep_current_channel_index.flatten()
     
-    def apply_prune_channel(self):
-        super().apply_prune_channel()
+    
+    def init_quantize(self, bitwidth, scheme, granularity):
         # Nothing to do
-
-
-    def prepare_quantization(
-        self, 
-        bitwidth,
-        type,
-    ):
-        super().prepare_quantization(bitwidth, type)
-        #Nothing to do
         pass
 
 
-    def apply_quantization(self):
-        super().apply_quantization()
-        #Nothing to do
-        pass
-
-    def prepare_dynamic_quantization_per_tensor(self, bitwidth):
-        #Nothing to do
-        pass
-
-    def apply_dynamic_quantization_per_tensor(self):
-        #Nothing to do
-        pass
-
-    @torch.no_grad()
-    def static_quantize_per_tensor(self,
-                                 input_batch_real: torch.Tensor,
-                                 input_batch_quant: torch.Tensor,
-                                 input_scale: torch.Tensor,
-                                 input_zero_point: torch.Tensor,
-                                 bitwidth: int = 8):
-        """Pass-through static per-tensor quantization parameters
-        
-        Args:
-            input_batch_real: FP32 input samples
-            input_batch_quant: Quantized input samples
-            input_scale: Input quantization scale
-            input_zero_point: Input quantization zero point
-            bitwidth: Quantization bitwidth (unused, maintained for interface)
-            
-        Returns:
-            Tuple of (real_output, quant_output, scale, zero_point)
-        """
-        setattr(self, "quantization_type", STATIC_QUANTIZATION_PER_TENSOR)
-
-        # Simply flatten both real and quantized inputs
-        output_batch_real = input_batch_real.flatten(self.start_dim, self.end_dim)
-        output_batch_quant = input_batch_quant.flatten(self.start_dim, self.end_dim)
-
-        return output_batch_real, output_batch_quant, input_scale, input_zero_point
-
-    @torch.no_grad()
-    def static_quantize_per_channel(self,
-                                  input_batch_real: torch.Tensor,
-                                  input_batch_quant: torch.Tensor,
-                                  input_scale: torch.Tensor,
-                                  input_zero_point: torch.Tensor,
-                                  bitwidth: int = 8):
-        """Pass-through static per-channel quantization parameters
-        
-        Args:
-            Same as static_quantize_per_tensor
-            
-        Returns:
-            Same as static_quantize_per_tensor
-        """
-        setattr(self, "quantization_type", STATIC_QUANTIZATION_PER_CHANNEL)
-
-        # Simply flatten both real and quantized inputs
-        output_batch_real = input_batch_real.flatten(self.start_dim, self.end_dim)
-        output_batch_quant = input_batch_quant.flatten(self.start_dim, self.end_dim)
-
-        return output_batch_real, output_batch_quant, input_scale, input_zero_point
+    def get_size_in_bits(self):
+        return 0
 
     def get_compression_parameters(self):
         # Nothing to do

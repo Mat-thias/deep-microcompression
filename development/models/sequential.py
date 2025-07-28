@@ -24,14 +24,11 @@ from ..layers.layer import Layer
 from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
-    dequantize_per_tensor_assy,
-    convert_tensor_to_bytes_var,
+
     int8_to_bytes,
-    QUANTIZATION_NONE,
-    DYNAMIC_QUANTIZATION_PER_TENSOR,
-    DYNAMIC_QUANTIZATION_PER_CHANNEL,
-    STATIC_QUANTIZATION_PER_TENSOR,
-    STATIC_QUANTIZATION_PER_CHANNEL,
+
+    QuantizationScheme,
+    QuantizationGranularity,
 )
 
 class Sequential(nn.Sequential):
@@ -74,6 +71,14 @@ class Sequential(nn.Sequential):
         for name, layer in self.named_children():
             self.layers[name] = layer
 
+        self.is_pruned_channel = False
+        self.is_quantized = False
+
+    
+    @property
+    def is_compressed(self):
+        return self.is_pruned_channel or self.is_quantized
+
 
 
     def forward(self, input):
@@ -89,15 +94,16 @@ class Sequential(nn.Sequential):
         # Saving the a test input data
         import random
         index = random.randint(0, input.size(0)-1)
-        # index = 0
         # print(f"Using this {index}")
 
+        if not hasattr(self, "test_input"): 
+            # index = 0
+            pass
+
         test_input = input[index].unsqueeze(dim=0).cpu()
-        # if not hasattr(self, "test_input"):
         setattr(self, "test_input", test_input)
 ################################################################################################
 
-        # Pass through all layers
         for i, layer in enumerate(self):
             # print(f"Layer {i} ({layer.__class__.__name__}): input shape = {input.shape} kernel_size {getattr(layer, "kernel_size", "nan")} stride {getattr(layer, "stride", "nan")} padding {getattr(layer, "padding", "nan")}")
             input = layer(input)
@@ -113,7 +119,6 @@ class Sequential(nn.Sequential):
         validation_dataloader: Optional[data.DataLoader] = None, 
         metrics: Optional[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]]] = None,
         verbose: bool = True,
-        compression_config: Optional[Dict[str, Dict[str, Any]]] = None,
         callbacks: List[Callable] = [],
         device: str = "cpu"
     ) -> Dict[str, List[float]]:
@@ -150,18 +155,14 @@ class Sequential(nn.Sequential):
                 y_pred = self(X)
                 loss = criterion_fun(y_pred, y_true)
                 loss.backward()
+                optimizer_fun.step()
+
                 train_loss += loss.item()
                 train_data_len += X.size(0)
 
                 if metrics is not None:
                     for name, func in metrics.items():
                         metrics_val[f"train_{name}"] += func(y_pred, y_true)
-
-
-                if compression_config:
-                    self.apply_compression()
-
-                optimizer_fun.step()
 
 # #################################################
 #                 break
@@ -263,12 +264,12 @@ class Sequential(nn.Sequential):
             device: Device to run on
             
         Returns:
-            Accuracy percentage
+            Accuracy percentageupdate_dynamic_quantize_per_tensor_parameters
         """
-        self.eval()
         metric_val = 0
         data_len = 0
 
+        self.eval()
         for X, y_true in tqdm(data_loader):
             X = X.to(device)
             y_true = y_true.to(device)
@@ -276,34 +277,23 @@ class Sequential(nn.Sequential):
             metric_val += metric_fun(y_pred, y_true)
             data_len += X.size(0)
 
-# #################################################
+#################################################
             # break
-# #################################################
+#################################################
 
         return metric_val / data_len
-    
-
-
-    def compress(
-            self,
-            config,
-            input_shape
-    ):
-        model = self.prepare_compression(config, input_shape)
-        model.apply_compression()
-
-        return model
-    
-    def prepare_compression(
-            self,
-            config:OrderedDict[str, Dict[str, Union[int,float, Dict[str, float]]]],
-            input_shape:torch.Size,
-    ):
         
-        model = copy.deepcopy(self)
 
+    def init_compress(
+        self,
+        config,
+        input_shape,
+        calibration_data = None
+    ) -> "Sequential":
+        
         def is_config_valid():
             for configuration_type in config.keys():
+
                 if configuration_type == "prune_channel":
                     prune_channel_config = config.get("prune_channel")
 
@@ -312,97 +302,91 @@ class Sequential(nn.Sequential):
                     if isinstance(sparsity, float):
                         layer_sparsity = sparsity
                         sparsity = OrderedDict()
-                        for name in model.layers.keys():
+                        for name in self.layers.keys():
                             sparsity[name] = layer_sparsity
 
                     elif isinstance(sparsity, OrderedDict):
-                        for name in model.layers.keys():
+                        for name in self.layers.keys():
                             if name not in sparsity:
                                 sparsity[name] = 0.
-
                     else:
                         raise TypeError(f"prune sparsity has to be of type of float or orderdict not {type(sparsity)}!")
                     
                     prune_channel_config["sparsity"] = sparsity
 
-                elif configuration_type == "quantization":
-                    quantization_config = config.get("quantization")
-                    q_type = quantization_config["type"]
-
-                    if q_type != QUANTIZATION_NONE and q_type != DYNAMIC_QUANTIZATION_PER_TENSOR:
-                        raise ValueError(f"Invalid quantization type")
+                elif configuration_type == "quantize":
+                    quantize_config = config.get("quantize")
+                    scheme = quantize_config["scheme"]
+                    granulatity = quantize_config["granularity"]
+                    bitwidth = quantize_config["bitwidth"]
                     
-                    if quantization_config["bitwidth"] is not None and quantization_config["bitwidth"] > 8:
+                    if bitwidth is not None and bitwidth > 8:
                         raise ValueError(f"Invalid quantization bitwidth")
+
+                    if scheme == QuantizationScheme.NONE and (bitwidth is not None or granulatity is not None) or \
+                        (bitwidth is None or granulatity is None) and scheme != QuantizationScheme.NONE:
+                        raise ValueError("When quantization scheme is NONE, bitwidth and granularity has to be None and vice versa.")
                     
                 else:
-                    raise ValueError(f"Invalid configuration type of {configuration_type}")
-                
+                    raise ValueError(f"Invalid configuration scheme of {configuration_type}")                
             return True
-        
+
         if not is_config_valid():
             raise ValueError("Invalid compression configuration!")
         
+        model = copy.deepcopy(self)
         model.__dict__["_dmc"]["compression_config"] = config 
-        model.__dict__["_dmc"]["input_shape"] = input_shape  
-                
+        model.__dict__["_dmc"]["input_shape"] = input_shape 
+              
         for compression_type, compression_type_param in config.items():
             if compression_type == "prune_channel":
-                model.prepare_prune_channel(
-                    sparsity=compression_type_param["sparsity"]
-                )
-            elif compression_type == "quantization":
-                model.prepare_quantization(
-                    bitwidth = compression_type_param["bitwidth"],
-                    q_type = compression_type_param["type"]
-                )
+                
+                def prune_channel_layer(layer):
+                    layer.is_pruned_channel = True
+
+                model.apply(prune_channel_layer)
+                model.is_pruned_channel = True
+
+                model.init_prune_channel()
+
+            elif compression_type == "quantize":
+                def quantize_layer(layer):
+                    layer.is_quantized = True
+                    # layer.quantize_bitwidth = config["quantize"]["bitwidth"]
+                    # layer.quantize_type = config["quantize"]["type"]
+
+                if config["quantize"]["scheme"] != QuantizationScheme.NONE:
+
+##############################################################################################################
+                    if config["quantize"]["scheme"] == QuantizationScheme.STATIC and config["quantize"]["granularity"] == QuantizationGranularity.PER_CHANNEL:
+                        raise ValueError
+##############################################################################################################
+                    
+                    if config["quantize"]["scheme"] == QuantizationScheme.STATIC and calibration_data is None:
+                        raise ValueError(f"Pass a calibration data when doing static quantization!")
+
+                    model.apply(quantize_layer)
+                    model.is_quantized = True
+
+                    model.init_quantize(calibration_data)
             else:
                 raise NotImplementedError(f"Compression of type {compression_type} not implemented!")
 
         return model
-    
-
-    def apply_compression(self):
-        if "compression_config" not in self.__dict__["_dmc"]:
-            raise AttributeError("Cannot apply compression before prepering for compression.")
         
-        for compression_type in self.__dict__["_dmc"]["compression_config"].keys():
-            if compression_type == "prune_channel":
-                self.apply_prune_channel()
-            elif compression_type == "quantization":
-                self.apply_quantization()
-            else:
-                raise NotImplementedError(f"Compression of type {compression_type} not implemented!")
-            
-            # print("compression", compression_type)
-
-        return
     
-    
+    def init_prune_channel(self):
 
-    def prepare_prune_channel(
-            self, 
-            sparsity: Dict[str, float], 
-            metric: str = "l2"
-        ) -> None:
-        """Create pruned version of model
-        
-        Args:
-            sparsity: Either single value or dict of sparsities per layer
-            metric: Pruning metric ('l1', 'l2', etc.)
-            
-        Returns:
-            New model instance with pruned channels
-        """
+        input_shape = self.__dict__["_dmc"]["input_shape"]
+        sparsity = self.__dict__["_dmc"]["compression_config"]["prune_channel"]["sparsity"]
+        metric = self.__dict__["_dmc"]["compression_config"]["prune_channel"]["metric"]
 
         keep_prev_channel_index = None
-            
-        input_shape = self.__dict__["_dmc"]["input_shape"][1:]
 
         # Prune all layers except last
         for name, layer in list(self.layers.items())[:-1]:
 
-            keep_prev_channel_index = layer.prepare_prune_channel(
+            keep_prev_channel_index = layer.init_prune_channel(
                 sparsity[name], keep_prev_channel_index, input_shape,
                 is_output_layer=False, metric=metric
             )
@@ -410,71 +394,27 @@ class Sequential(nn.Sequential):
 
         # Prune last layer
         name, layer = list(self.layers.items())[-1]
-        keep_prev_channel_index = layer.prepare_prune_channel(
+        keep_prev_channel_index = layer.init_prune_channel(
             sparsity[name], keep_prev_channel_index, input_shape,
             is_output_layer=True, metric=metric
         )
         return 
     
-    def apply_prune_channel(
-            self
-    ):
-        for layer in self.layers.values():
-            layer.apply_prune_channel()
-        return
+    def init_quantize(self, calibration_data=None):
 
+        scheme = self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"]
+        bitwidth = self.__dict__["_dmc"]["compression_config"]["quantize"]["bitwidth"]
+        granularity = self.__dict__["_dmc"]["compression_config"]["quantize"]["granularity"]
 
-
-
-    def prepare_quantization(
-        self, 
-        bitwidth,
-        q_type,
-        input_batch_real:Optional[torch.Tensor] = None
-    ):
-        self.__dict__["_dmc"]["quantization"] = dict()
-        self.__dict__["_dmc"]["quantization"]["type"] = q_type
-
-        if q_type == QUANTIZATION_NONE:
+        if scheme == QuantizationScheme.NONE:
             return
-        
-        elif q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:  
-            for layer in self.layers.values():
-                layer.prepare_quantization(bitwidth, q_type)
 
-        elif q_type == STATIC_QUANTIZATION_PER_TENSOR: 
-            if input_batch_real is None:
-                raise ValueError(f"pass a calibration prarmeter")    
-            input_scale, input_zero_point = get_quantize_scale_zero_point_per_tensor_assy(input_batch_real, bitwidth)
-            input_batch_quant = quantize_per_tensor_assy(input_batch_real, input_scale, input_zero_point, bitwidth)
-
-            self.__dict__["_dmc"]["quantization"]["input_scale"] = input_scale
-            self.__dict__["_dmc"]["quantization"]["input_zero_point"] = input_zero_point
-       
-            for layer in self.layers.values():
-                input_batch_real, input_batch_quant, \
-                input_scale, input_zero_point = layer.prepare_quantization(
-                    input_batch_real, input_batch_quant,
-                    input_scale, input_zero_point,
-                    bitwidth,
-                )
-            
-            self.__dict__["_dmc"]["quantization"]["output_scale"] = input_scale
-            self.__dict__["_dmc"]["quantization"]["output_zero_point"] = input_zero_point
-
-
-    def apply_quantization(
-        self, 
-    ):
-        if "quantization" not in self.__dict__["_dmc"]:
-            raise AttributeError("Layer must be prepared before applying compression")
-        
-        q_type = self.__dict__["_dmc"]["quantization"]["type"]
-        if q_type == QUANTIZATION_NONE:
-            return
-        
         for layer in self.layers.values():
-            layer.apply_quantization()
+            layer.init_quantize(bitwidth, scheme, granularity)
+
+        self.train()
+        if scheme == QuantizationScheme.STATIC:
+            self(calibration_data)
 
 
     def get_size_in_bits(self):
@@ -485,7 +425,7 @@ class Sequential(nn.Sequential):
 
 
 
-    def get_max_workspace_arena(self) -> tuple:
+    def get_max_workspace_arena(self, input_shape) -> tuple:
         """Calculate memory requirements for C deployment by running sample input
         
         Returns:
@@ -493,7 +433,8 @@ class Sequential(nn.Sequential):
         """
         # Create random input tensor based on model's expected input shape
 
-        input_shape = self.__dict__["_dmc"]["input_shape"][1:]
+        if isinstance(input_shape, tuple):
+            input_shape = torch.Size(input_shape)
         
         # max_output_even_size = input_shape.numel()
         max_output_even_size = 0
@@ -515,12 +456,12 @@ class Sequential(nn.Sequential):
             max_output_even_size = max(max_output_even_size, output_shape.numel())
         else:
             max_output_odd_size = max(max_output_odd_size, output_shape.numel())
-
+        
         return max_output_even_size, max_output_odd_size
 
 
     @torch.no_grad()
-    def convert_to_c(self, var_name: str, src_dir: str = "./", include_dir:str = "./") -> None:
+    def convert_to_c(self, input_shape, var_name: str, src_dir: str = "./", include_dir:str = "./") -> None:
         """Generate C code for deployment
         
         Args:
@@ -540,10 +481,17 @@ class Sequential(nn.Sequential):
         param_definition_file = f"#include \"{var_name}.h\"\n\n"
     
         # Calculate workspace requirements
-        max_output_even_size, max_output_odd_size = self.get_max_workspace_arena()
+        max_output_even_size, max_output_odd_size = self.get_max_workspace_arena(input_shape)
 
         # Configure workspace based on quantization
-        if getattr(self, "quantization_type", QUANTIZATION_NONE) != STATIC_QUANTIZATION_PER_TENSOR:
+        # if getattr(self, "quantize_type", QUANTIZATION_NONE) != STATIC_QUANTIZATION_PER_TENSOR:
+        
+        q_type = None
+        if "_dmc" in self.__dict__:
+            if "quantization" in self.__dict__["_dmc"]:
+                q_type = self.__dict__["_dmc"]["quantization"]["type"]
+
+        if q_type!= STATIC_QUANTIZATION_PER_TENSOR:
             workspace_header = (
                 f"#define MAX_OUTPUT_EVEN_SIZE {max_output_even_size}\n"
                 f"#define MAX_OUTPUT_ODD_SIZE {max_output_odd_size}\n"
@@ -572,8 +520,6 @@ class Sequential(nn.Sequential):
             f"\nLayer* layers[LAYERS_LEN] = {{\n"
         )
         
-        # Convert each layer to C
-        input_shape = self.input_shape[1:]
         for layer_name, layer in self.layers.items():
             if hasattr(layer, "convert_to_c"):
                 layers_def += f"    &{layer_name},\n"
@@ -601,14 +547,14 @@ class Sequential(nn.Sequential):
 
 #################################################################################################################
         # Generate test input data
-        # _, test_input_def = convert_tensor_to_bytes_var(self.test_input, "test_input", getattr(self, "quantization_bitwidth", 8))
-        
-
-        if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
-                                                   or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
+        if "_dmc" in self.__dict__ and "quantization" in self.__dict__["_dmc"] and self.__dict__["_dmc"]["quantization"]["type"] == STATIC_QUANTIZATION_PER_TENSOR:
             test_input_def = f"\nconst uint8_t test_input[] = {{\n"
             for line in torch.split(quantize_per_tensor_assy(
-                    self.test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth).flatten(), 8):
+                    self.test_input, 
+                    self.__dict__["_dmc"]["quantization"]["input_scale"],
+                    self.__dict__["_dmc"]["quantization"]["input_zero_point"],
+                    self.__dict__["_dmc"]["quantization"]["bitwidth"],
+                ).flatten(), 8):
                 test_input_def += "    " + ", ".join(
                     [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
                 ) + ",\n"
@@ -633,10 +579,10 @@ class Sequential(nn.Sequential):
     @torch.no_grad
     def test(self, device:str = "cpu"):
         # self.cpu()
-        # if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
-        #                                            or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
+        # if hasattr(self, "quantize_type") and (getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_TENSOR
+        #                                            or getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_CHANNEL):
         #     return self(quantize_per_tensor_assy(
-        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantization_bitwidth))
+        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantize_bitwidth))
         
         return self(self.test_input.clone().to(device))
 
@@ -682,59 +628,6 @@ class Sequential(nn.Sequential):
 
 
 
-
-
-
-
-
-
-
-
-    # def forward(self, input):
-    #     """Forward pass with quantization support
-        
-    #     Args:
-    #         input: Input tensor
-            
-    #     Returns:
-    #         Output tensor after passing through all layers
-    #     """
-    #     # Store input shape and sample test input (for later code generation)
-    #     setattr(self, "input_shape", input.size())
-
-
-    #     ################################################################################################
-    #     # Saving the a test input data
-    #     import random
-    #     index = random.randint(0, input.size(0)-1)
-    #     # index = 0
-    #     # print(f"Using this {index}")
-
-    #     test_input = input[index].unsqueeze(dim=0).cpu()
-    #     # if not hasattr(self, "test_input"):
-    #     setattr(self, "test_input", test_input)
-        
-    #     # if hasattr(self, "quantization_type") and (getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR
-    #     #                                            or getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL):
-    #     #     if not hasattr(self, "test_input_quant"):
-    #     #         setattr(self, "test_input_quant", quantize_per_tensor_assy(
-    #     #             test_input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
-    #     #         )
-
-    #     ################################################################################################
-        
-    #     # Apply quantization if configured
-    #     # if hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_TENSOR:
-    #     #     input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
-    #     # elif hasattr(self, "quantization_type") and getattr(self, "quantization_type") == STATIC_QUANTIZATION_PER_CHANNEL:
-    #     #     input = quantize_per_tensor_assy(input, self.input_scale, self.input_zero_point, self.quantization_bitwidth)
-
-    #     # Pass through all layers
-    #     for i, layer in enumerate(self):
-    #         # print(f"Layer {i} ({layer.__class__.__name__}): input shape = {input.shape} kernel_size {getattr(layer, "kernel_size", "nan")} stride {getattr(layer, "stride", "nan")} padding {getattr(layer, "padding", "nan")}")
-    #         input = layer(input)
-                
-    #     return input
 
 
     
@@ -846,8 +739,8 @@ class Sequential(nn.Sequential):
         assert bitwidth <= 8
 
         # model = copy.deepcopy(self)
-        setattr(self, "quantization_bitwidth", bitwidth)
-        setattr(self, "quantization_type", DYNAMIC_QUANTIZATION_PER_TENSOR)
+        setattr(self, "quantize_bitwidth", bitwidth)
+        setattr(self, "quantize_type", DYNAMIC_QUANTIZATION_PER_TENSOR)
 
         for layer in self.layers.values():
             # if hasattr(layer, "dynamic_quantize_per_tensor"):
@@ -891,8 +784,8 @@ class Sequential(nn.Sequential):
         assert bitwidth <= 8
 
         model = copy.deepcopy(self)
-        setattr(model, "quantization_type", DYNAMIC_QUANTIZATION_PER_CHANNEL)
-        setattr(model, "quantization_bitwidth", bitwidth)
+        setattr(model, "quantize_type", DYNAMIC_QUANTIZATION_PER_CHANNEL)
+        setattr(model, "quantize_bitwidth", bitwidth)
 
         for layer in model.layers.values():
             if hasattr(layer, "dynamic_quantize_per_channel"):
@@ -939,8 +832,8 @@ class Sequential(nn.Sequential):
         assert bitwidth <= 8
 
         model = copy.deepcopy(self)
-        setattr(model, "quantization_type", STATIC_QUANTIZATION_PER_TENSOR)
-        setattr(model, "quantization_bitwidth", bitwidth)
+        setattr(model, "quantize_type", STATIC_QUANTIZATION_PER_TENSOR)
+        setattr(model, "quantize_bitwidth", bitwidth)
 
         # Calculate quantization parameters
         input_scale, input_zero_point = get_quantize_scale_zero_point_per_tensor_assy(input_batch_real, bitwidth)
@@ -1006,8 +899,8 @@ class Sequential(nn.Sequential):
         assert bitwidth <= 8
 
         model = copy.deepcopy(self)
-        setattr(model, "quantization_type", STATIC_QUANTIZATION_PER_CHANNEL)
-        setattr(model, "quantization_bitwidth", bitwidth)
+        setattr(model, "quantize_type", STATIC_QUANTIZATION_PER_CHANNEL)
+        setattr(model, "quantize_bitwidth", bitwidth)
 
         # Calculate quantization parameters
         input_scale, input_zero_point = get_quantize_scale_zero_point_per_tensor_assy(input_batch_real, bitwidth)

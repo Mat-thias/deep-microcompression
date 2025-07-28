@@ -5,6 +5,8 @@
 
 import struct
 import math
+from enum import Enum, auto
+
 from typing import Any, Tuple
 
 import torch
@@ -12,17 +14,41 @@ from torch import nn
 
 
 # Quantization type constants
-QUANTIZATION_NONE = 0
-DYNAMIC_QUANTIZATION_PER_TENSOR = 1
-DYNAMIC_QUANTIZATION_PER_CHANNEL = 2
-STATIC_QUANTIZATION_PER_TENSOR = 3
-STATIC_QUANTIZATION_PER_CHANNEL = 4
 
-# Byte conversion constants
+class QuantizationScheme(Enum):
+    NONE = auto()
+    DYNAMIC = auto()
+    STATIC = auto()
+
+class QuantizationScaleType(Enum):
+    SYMMETRIC = auto()
+    ASSYMMETRIC = auto()
+
+class QuantizationGranularity(Enum):
+    PER_TENSOR = auto()
+    PER_CHANNEL = auto()
+    
+
+STATIC_BIAS_BITWDHT = 32
+
+
 INT8_BYTE_PER_LINE = 16
 FLOAT32_BYTE_PER_LINE = 4
 INT32_BYTE_PER_LINE = 4
 
+
+
+class RoundSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input) -> torch.Tensor:
+        return torch.round(input)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output  # Straight-through: pass gradient
+
+def round_ste(x: torch.Tensor) -> torch.Tensor:
+    return RoundSTE.apply(x)
 
 
 def get_bitwidth_range(bitwidth: int) -> Tuple[int, int]:
@@ -74,9 +100,11 @@ def get_quantize_scale_zero_point_per_tensor_assy(tensor_real: torch.Tensor,
     rmax = tensor_real.max()
     
     scale = (rmax - rmin) / (qmax - qmin)
-    zero_point = torch.round(qmin - (rmin / scale)).to(torch.int8)
+    # zero_point = torch.round(qmin - (rmin / scale))
+    zero_point = round_ste(qmin - (rmin / scale))
     
     return scale, zero_point
+
 
 def get_quantize_scale_per_channel_sy(tensor_real: torch.Tensor, 
                                     bitwidth: int = 8, 
@@ -96,7 +124,7 @@ def get_quantize_scale_per_channel_sy(tensor_real: torch.Tensor,
     scale = (rmax / qmax)
     return scale
 
-def get_quantize_scale_zero_point_per_channel_sy(tensor_real: torch.Tensor, 
+def get_quantize_scale_zero_point_per_channel_assy(tensor_real: torch.Tensor, 
                                                bitwidth: int = 8, 
                                                metric: str = "l2") -> tuple:
     """Calculate asymmetric per-channel quantization scale and zero point
@@ -114,14 +142,15 @@ def get_quantize_scale_zero_point_per_channel_sy(tensor_real: torch.Tensor,
     rmax = tensor_real.view(tensor_real.size(0), -1).max(dim=1)[0]
     
     scale = (rmax - rmin) / (qmax - qmin)
-    zero_point = torch.round(qmin - (rmin / scale)).to(torch.int8)
+    zero_point = round_ste(qmin - (rmin / scale))
+    # zero_point = torch.round(qmin - (rmin / scale))
     
     return scale, zero_point
 
 def quantize_per_tensor_sy(tensor_real: torch.Tensor, 
                           scale: torch.Tensor, 
                           bitwidth: int = 8, 
-                          dtype=torch.int8) -> torch.Tensor:
+                          dtype=None) -> torch.Tensor:
     """Symmetric per-tensor quantization
     
     Args:
@@ -134,8 +163,14 @@ def quantize_per_tensor_sy(tensor_real: torch.Tensor,
         Quantized tensor
     """
     _, qmax = get_bitwidth_range(bitwidth)
+
+    if dtype is None:
+        return torch.clamp(
+            round_ste(tensor_real / scale), -qmax, qmax
+            # torch.round(tensor_real / scale), -qmax, qmax
+        )
     return torch.clamp(
-        torch.round(tensor_real / scale), -qmax, qmax
+        round_ste(tensor_real / scale), -qmax, qmax
     ).to(dtype)
 
 def dequantize_per_tensor_sy(tensor_quant: torch.Tensor, 
@@ -151,11 +186,20 @@ def dequantize_per_tensor_sy(tensor_quant: torch.Tensor,
     """
     return tensor_quant * scale
 
+def fake_quantize_per_tensor_sy(
+    tensor_real: torch.Tensor, 
+    scale: torch.Tensor, 
+    bitwidth: int = 8
+): 
+    tensor_quant = quantize_per_tensor_sy(tensor_real, scale, bitwidth)
+    return dequantize_per_tensor_sy(tensor_quant, scale)
+    
+
 def quantize_per_tensor_assy(tensor_real: torch.Tensor, 
                             scale: torch.Tensor, 
                             zero_point: torch.Tensor, 
                             bitwidth: int = 8, 
-                            dtype=torch.int8) -> torch.Tensor:
+                            dtype=None) -> torch.Tensor:
     """Asymmetric per-tensor quantization
     
     Args:
@@ -169,9 +213,18 @@ def quantize_per_tensor_assy(tensor_real: torch.Tensor,
         Quantized tensor
     """
     qmin, qmax = get_bitwidth_range(bitwidth)
+    
+    if dtype is None:
+        return torch.clamp(
+            # torch.round(tensor_real / scale) + zero_point, qmin, qmax
+            round_ste(tensor_real / scale) + zero_point, qmin, qmax
+        )
     return torch.clamp(
-        torch.round(tensor_real / scale) + zero_point, qmin, qmax
+        # torch.round(tensor_real / scale) + zero_point, qmin, qmax
+        round_ste(tensor_real / scale) + zero_point, qmin, qmax
     ).to(dtype)
+    
+    
 
 def dequantize_per_tensor_assy(tensor_quant: torch.Tensor, 
                               scale: torch.Tensor, 
@@ -188,10 +241,22 @@ def dequantize_per_tensor_assy(tensor_quant: torch.Tensor,
     """
     return (tensor_quant - zero_point) * scale
 
+
+
+def fake_quantize_per_tensor_assy(
+    tensor_real: torch.Tensor, 
+    scale: torch.Tensor, 
+    zero_point: torch.Tensor, 
+    bitwidth: int = 8
+): 
+    tensor_quant = quantize_per_tensor_assy(tensor_real, scale, zero_point, bitwidth)
+    return dequantize_per_tensor_assy(tensor_quant, scale, zero_point)
+    
+
 def quantize_per_channel_sy(tensor_real: torch.Tensor, 
                            scale: torch.Tensor, 
                            bitwidth: int = 8, 
-                           dtype=torch.int8) -> torch.Tensor:
+                           dtype=None) -> torch.Tensor:
     """Symmetric per-channel quantization
     
     Args:
@@ -207,10 +272,15 @@ def quantize_per_channel_sy(tensor_real: torch.Tensor,
     broadcast_shape = [1] * tensor_real.ndim
     broadcast_shape[0] = -1
     
+    if dtype is None:
+        return torch.clamp(
+            # torch.round(tensor_real / scale.view(*broadcast_shape)), -qmax, qmax
+            round_ste(tensor_real / scale.view(*broadcast_shape)), -qmax, qmax
+        )
     return torch.clamp(
-        torch.round(tensor_real / scale.view(*broadcast_shape)), -qmax, qmax
+        round_ste(tensor_real / scale.view(*broadcast_shape)), -qmax, qmax
     ).to(dtype)
-
+    
 def dequantize_per_channel_sy(tensor_quant: torch.Tensor, 
                              scale: torch.Tensor) -> torch.Tensor:
     """Symmetric per-channel dequantization
@@ -226,11 +296,18 @@ def dequantize_per_channel_sy(tensor_quant: torch.Tensor,
     broadcast_shape[0] = -1
     return tensor_quant * scale.view(*broadcast_shape)
 
+def fake_quantize_per_channel_sy(tensor_real: torch.Tensor, 
+                           scale: torch.Tensor, 
+                           bitwidth: int = 8, 
+                           ) -> torch.Tensor:
+    torch_quant = quantize_per_channel_sy(tensor_real, scale, bitwidth)
+    return quantize_per_channel_sy(torch_quant, scale)
+
 def quantize_per_channel_assy(tensor_real: torch.Tensor, 
                              scale: torch.Tensor, 
                              zero_point: torch.Tensor, 
                              bitwidth: int = 8, 
-                             dtype=torch.int8) -> torch.Tensor:
+                             dtype=None) -> torch.Tensor:
     """Asymmetric per-channel quantization
     
     Args:
@@ -247,10 +324,18 @@ def quantize_per_channel_assy(tensor_real: torch.Tensor,
     broadcast_shape = [1] * tensor_real.ndim
     broadcast_shape[0] = -1
     
+    if dtype is None:
+        return torch.clamp(
+            # torch.round(tensor_real / scale.view(*broadcast_shape)) + zero_point.view(*broadcast_shape), 
+            round_ste(tensor_real / scale.view(*broadcast_shape)) + zero_point.view(*broadcast_shape), 
+            qmin, qmax
+        )
     return torch.clamp(
-        torch.round(tensor_real / scale.view(*broadcast_shape)) + zero_point.view(*broadcast_shape), 
+        # torch.round(tensor_real / scale.view(*broadcast_shape)) + zero_point.view(*broadcast_shape), 
+        round_ste(tensor_real / scale.view(*broadcast_shape)) + zero_point.view(*broadcast_shape), 
         qmin, qmax
     ).to(dtype)
+    
 
 def dequantize_per_channel_assy(tensor_quant: torch.Tensor, 
                                scale: torch.Tensor, 
@@ -268,6 +353,16 @@ def dequantize_per_channel_assy(tensor_quant: torch.Tensor,
     broadcast_shape = [1] * tensor_quant.ndim
     broadcast_shape[0] = -1
     return (tensor_quant - zero_point.view(*broadcast_shape)) * scale.view(*broadcast_shape)
+
+
+def fake_quantize_per_channel_assy(tensor_real: torch.Tensor, 
+                             scale: torch.Tensor, 
+                             zero_point: torch.Tensor, 
+                             bitwidth: int = 8, 
+                             ) -> torch.Tensor:
+    tensor_quant = quantize_per_channel_assy(tensor_real, scale, zero_point, bitwidth)
+    return dequantize_per_channel_assy(tensor_quant, scale, zero_point)
+
 
 def float32_to_bytes(val: float) -> list:
     """Convert float32 value to bytes (little-endian)
@@ -410,6 +505,10 @@ def get_size_in_bits(var: Any, is_packed:bool = False, bitwidth:int = 8) -> int:
             raise RuntimeError(f"get_size for dtype {var.dtype} not implemented!")
         
         numel = var.numel()
+
+        if var.dtype != torch.int8:
+            return numel * dtype_size
+            
         if is_packed:
             data_per_byte = 8 // bitwidth
             numel = math.ceil(numel/data_per_byte)
