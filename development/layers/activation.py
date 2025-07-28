@@ -14,6 +14,7 @@ from torch import nn
 from ..utils import (
     QuantizationScheme,
     QuantizationScaleType,
+    QuantizationGranularity,
 
     quantize_per_tensor_assy,
     get_size_in_bits
@@ -77,7 +78,7 @@ class ReLU(Layer, nn.ReLU):
 
         if scheme == QuantizationScheme.STATIC:
             setattr(self, "input_quantize", Quantize(
-                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.ASSYMMETRIC
+                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
             ))
 
 
@@ -163,7 +164,7 @@ class ReLU6(Layer, nn.ReLU6):
     def init_quantize(self, bitwidth, scheme, granularity):
         if scheme == QuantizationScheme.STATIC:
             setattr(self, "input_quantize", Quantize(
-                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.ASSYMMETRIC
+                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
             ))
 
     def get_size_in_bits(self):

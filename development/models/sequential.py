@@ -358,8 +358,8 @@ class Sequential(nn.Sequential):
                 if config["quantize"]["scheme"] != QuantizationScheme.NONE:
 
 ##############################################################################################################
-                    if config["quantize"]["scheme"] == QuantizationScheme.STATIC and config["quantize"]["granularity"] == QuantizationGranularity.PER_CHANNEL:
-                        raise ValueError
+                    # if config["quantize"]["scheme"] == QuantizationScheme.STATIC and config["quantize"]["granularity"] == QuantizationGranularity.PER_CHANNEL:
+                    #     raise ValueError
 ##############################################################################################################
                     
                     if config["quantize"]["scheme"] == QuantizationScheme.STATIC and calibration_data is None:

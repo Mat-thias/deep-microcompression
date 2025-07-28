@@ -75,7 +75,7 @@ class Quantize:
 
     def __init__(
         self, 
-        module: nn.Module, 
+        module: Layer, 
         bitwidth: int, 
         scheme: QuantizationScheme, 
         granularity: QuantizationGranularity, 
@@ -104,7 +104,7 @@ class Quantize:
                     self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base])
             else:
                 self.base_accumulator = base_accumulator
-                
+
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         if self.module.training:
@@ -134,21 +134,28 @@ class Quantize:
         return fake_quantize_per_tensor_assy(x, self.scale, self.zero_point, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
                fake_quantize_per_channel_assy(x, self.scale, self.zero_point, self.bitwidth)
 
-    def apply(self, x: torch.Tensor) -> torch.Tensor:
+    def apply(self, x: torch.Tensor, prune_channel: Optional["Prune_Channel"] = None) -> torch.Tensor:
         dtype = torch.int32 if self.bitwidth > 8 else torch.int8
         
+        scale = self.scale
+        zero_point = self.zero_point
+
+        if self.granularity == QuantizationGranularity.PER_CHANNEL and self.module.is_pruned_channel:
+            scale = prune_channel.apply(scale)
+            if self.scale_type == QuantizationScaleType.ASSYMMETRIC: zero_point = prune_channel.apply(zero_point) 
+        
         if self.scale_type == QuantizationScaleType.SYMMETRIC:
-            return quantize_per_tensor_sy(x, self.scale, self.bitwidth, dtype=dtype) if self.granularity == QuantizationGranularity.PER_TENSOR else \
-                   quantize_per_channel_sy(x, self.scale, self.bitwidth, dtype=dtype)
-        return quantize_per_tensor_assy(x, self.scale, self.zero_point, self.bitwidth, dtype=dtype) if self.granularity == QuantizationGranularity.PER_TENSOR else \
-               quantize_per_channel_assy(x, self.scale, self.zero_point, self.bitwidth, dtype=dtype)
+            return quantize_per_tensor_sy(x, scale, self.bitwidth, dtype=dtype) if self.granularity == QuantizationGranularity.PER_TENSOR else \
+                   quantize_per_channel_sy(x, scale, self.bitwidth, dtype=dtype)
+        return quantize_per_tensor_assy(x, scale, zero_point, self.bitwidth, dtype=dtype) if self.granularity == QuantizationGranularity.PER_TENSOR else \
+               quantize_per_channel_assy(x, scale, zero_point, self.bitwidth, dtype=dtype)
     
 
 class Prune_Channel:
 
     def __init__(
         self, 
-        module: nn.Module, 
+        module: Layer, 
         keep_current_channel_index: torch.Tensor, 
         keep_prev_channel_index: Optional[torch.Tensor]=None
     ) -> None:

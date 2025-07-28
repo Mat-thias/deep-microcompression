@@ -29,6 +29,7 @@ from ..utils import (
 
     QuantizationScheme,
     QuantizationScaleType,
+    QuantizationGranularity
 )
 
 class Linear(Layer, nn.Linear):
@@ -144,10 +145,10 @@ class Linear(Layer, nn.Linear):
 
         if scheme == QuantizationScheme.STATIC:
             setattr(self, "input_quantize", Quantize(
-                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.ASSYMMETRIC
+                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
             ))
             setattr(self, "output_quantize", Quantize(
-                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.ASSYMMETRIC
+                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
             ))
 
         if self.bias is not None:
@@ -199,16 +200,24 @@ class Linear(Layer, nn.Linear):
 
         if self.is_compressed:
 
-            if self.is_quantized:
-                weight = self.weight_quantize.apply(weight)
-                if self.bias is not None:
-                    bias = self.bias_quantize.apply(bias)
-                    
             if self.is_pruned_channel:
                 weight = self.weight_prune_channel.apply(weight)
                 if self.bias is not None:
                     bias = self.bias_prune_channel.apply(bias)
 
+            if self.is_quantized:
+                if not self.is_pruned_channel:
+
+                    weight = self.weight_quantize.apply(weight)
+                    if self.bias is not None:
+                        bias = self.bias_quantize.apply(bias)
+                    
+
+                else:
+                    weight = self.weight_quantize.apply(weight, self.weight_prune_channel)
+                    if self.bias is not None:
+                        bias = self.bias_quantize.apply(bias, self.weight_prune_channel)
+                    
 
         return weight, bias
 
