@@ -301,7 +301,7 @@ def fake_quantize_per_channel_sy(tensor_real: torch.Tensor,
                            bitwidth: int = 8, 
                            ) -> torch.Tensor:
     torch_quant = quantize_per_channel_sy(tensor_real, scale, bitwidth)
-    return quantize_per_channel_sy(torch_quant, scale)
+    return dequantize_per_channel_sy(torch_quant, scale)
 
 def quantize_per_channel_assy(tensor_real: torch.Tensor, 
                              scale: torch.Tensor, 

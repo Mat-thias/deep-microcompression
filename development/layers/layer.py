@@ -136,10 +136,10 @@ class Quantize:
         zero_point = self.zero_point
 
         if self.granularity == QuantizationGranularity.PER_CHANNEL and self.module.is_pruned_channel:
-            scale = prune_channel.fake_apply(scale)
+            scale = self.prune_channel.fake_apply(scale)
             scale[scale == 0.] = 1.
             if self.scale_type == QuantizationScaleType.ASSYMMETRIC: 
-                zero_point = prune_channel.fake_apply(zero_point) 
+                zero_point = self.prune_channel.fake_apply(zero_point) 
         
         if self.scale_type == QuantizationScaleType.SYMMETRIC:
             return fake_quantize_per_tensor_sy(x, self.scale, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
@@ -154,8 +154,8 @@ class Quantize:
         zero_point = self.zero_point
 
         if self.granularity == QuantizationGranularity.PER_CHANNEL and self.module.is_pruned_channel:
-            scale = prune_channel.apply(scale)
-            if self.scale_type == QuantizationScaleType.ASSYMMETRIC: zero_point = prune_channel.apply(zero_point) 
+            scale = self.prune_channel.apply(scale)
+            if self.scale_type == QuantizationScaleType.ASSYMMETRIC: zero_point = self.prune_channel.apply(zero_point) 
         
         if self.scale_type == QuantizationScaleType.SYMMETRIC:
             return quantize_per_tensor_sy(x, scale, self.bitwidth, dtype=dtype) if self.granularity == QuantizationGranularity.PER_TENSOR else \
