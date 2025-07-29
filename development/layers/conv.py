@@ -214,15 +214,29 @@ class Conv2d(Layer, nn.Conv2d):
 
         is_packed = False
         weight_bitwidth = None
-        bias_bitwidth = None
         
+        size = 0
+
+        bias_bitwidth = None
         if self.is_quantized:
             is_packed = True
             weight_bitwidth = self.weight_quantize.bitwidth
             if self.bias is not None:
                 bias_bitwidth = self.bias_quantize.bitwidth
+            # extra parameters
+            if self.weight_quantize.scheme == QuantizationScheme.DYNAMIC:
+                size += get_size_in_bits(self.weight_quantize.scale)
+            elif self.weight_quantize.scheme == QuantizationScheme.STATIC:
+                size += get_size_in_bits(self.output_quantize.scale)
+                size += get_size_in_bits(self.output_quantize.zero_point)
+                size += get_size_in_bits(self.input_quantize.zero_point)
 
-        size = 0
+                if self.bias is not None:
+                    bias_scale = self.bias_quantize.scale
+                else:
+                    bias_scale = self.input_quantize.scale * self.weight_quantize.scale
+                size += get_size_in_bits(bias_scale)
+
         size += get_size_in_bits(weight, is_packed=is_packed, bitwidth=weight_bitwidth)
         if self.bias is not None:
             size += get_size_in_bits(bias, is_packed=is_packed, bitwidth=bias_bitwidth)
@@ -283,33 +297,34 @@ class Conv2d(Layer, nn.Conv2d):
         Returns:
             Tuple of (header declaration, layer definition, parameter definition)
         """
+        # if self.bias is not None:
+        weight, bias = self.get_compression_parameters()
+
+        input_channel_size, input_row_size, input_col_size = input_shape
+
+        output_channel_size, _,\
+        kernel_row_size, kernel_col_size = weight.size()
+        stride_row, stride_col = self.stride
+        pad = self.pad
+
+        if self.groups == self.out_channels:
+            groups = input_channel_size
+        else:
+            groups = self.groups
+
+        weight_bitwidth = None
+        if self.is_quantized:
+            weight_bitwidth = self.weight_quantize.bitwidth
+        # Convert weights to C representation
+        param_header, param_def = convert_tensor_to_bytes_var(
+            weight, 
+            f"{var_name}_weight", 
+            weight_bitwidth
+        )   
+        layer_header = param_header
+        layer_param_def = param_def
+
         if self.bias is not None:
-            weight, bias = self.get_compression_parameinput_shapeters()
-
-            input_channel_size, input_row_size, input_col_size = input_shape
-
-            output_channel_size, _,\
-            kernel_row_size, kernel_col_size = weight.size()
-            stride_row, stride_col = self.stride
-            pad = self.pad
-
-            if self.groups == self.out_channels:
-                groups = input_channel_size
-            else:
-                groups = self.groups
-
-            weight_bitwidth = None
-            if self.is_quantized:
-                weight_bitwidth = self.weight_quantize.bitwidth
-            # Convert weights to C representation
-            param_header, param_def = convert_tensor_to_bytes_var(
-                weight, 
-                f"{var_name}_weight", 
-                weight_bitwidth
-            )   
-            layer_header = param_header
-            layer_param_def = param_def
-
             bias_bitwidth = None
             if self.is_quantized:
                 bias_bitwidth = self.bias_quantize.bitwidth
@@ -321,11 +336,12 @@ class Conv2d(Layer, nn.Conv2d):
             layer_header += param_header
             layer_param_def += param_def
 
-            q_type = None
-            if self.is_quantized:
-                q_type = self.weight_quantize.type
+        scheme = None
+        if self.is_quantized:
+            scheme = self.weight_quantize.scheme
 
-            if q_type is None or q_type == QUANTIZATION_NONE:
+        if scheme is None or scheme == QuantizationScheme.NONE:
+            if self.bias is not None:
                 layer_def = (
                     f"{self.__class__.__name__} {var_name}({input_channel_size}, "
                     f"{input_row_size}, {input_col_size}, {output_channel_size}, "
@@ -333,86 +349,7 @@ class Conv2d(Layer, nn.Conv2d):
                     "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
                     f"(float*){var_name}_weight, (float*){var_name}_bias);\n"
                 )
-            elif q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
-                layer_def = (
-                    f"{self.__class__.__name__} {var_name}({input_channel_size}, "
-                    f"{input_row_size}, {input_col_size}, {output_channel_size}, "
-                    f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
-                    "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
-                    f"(int8_t*){var_name}_weight,  *(float*){var_name}_weight_scale, (float*){var_name}_bias);\n"
-                )                
-                param_header, param_def = convert_tensor_to_bytes_var(
-                                            self.weight_quantize.scale,
-                                            f"{var_name}_weight_scale"
-                                        )
-                layer_header += param_header
-                layer_param_def += param_def
-
-            elif q_type == STATIC_QUANTIZATION_PER_TENSOR:
-                layer_def = (
-                    f"{self.__class__.__name__} {var_name}({input_channel_size}, "
-                    f"{input_row_size}, {input_col_size}, {output_channel_size}, "
-                    f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
-                    "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
-                    f"{self.output_quantize.scale}, {self.output_quantize.zero_point}, "
-                    f"{self.input_quantize.zero_point}, (int8_t*){var_name}_weight, "
-                    f"(int32_t*){var_name}_bias, *(float*){var_name}_bias_scale);\n"
-                )
-
-                param_header, param_def = convert_tensor_to_bytes_var(
-                    self.output_quantize.scale, 
-                    f"{var_name}_output_scale"
-                )
-                layer_header += param_header
-                layer_param_def += param_def
-
-                param_header, param_def = convert_tensor_to_bytes_var(
-                    self.output_quantize.zero_point, 
-                    f"{var_name}_output_zero_point"
-                )
-                layer_header += param_header
-                layer_param_def += param_def
-
-                param_header, param_def = convert_tensor_to_bytes_var(
-                    self.bias_quantize.scale,
-                    f"{var_name}_bias_scale"
-                )
-                layer_header += param_header
-                layer_param_def += param_def
-                
-        else:
-            weight = self.get_compression_parameters()
-
-            input_channel_size, input_row_size, input_col_size = input_shape
-
-            output_channel_size, _,\
-            kernel_row_size, kernel_col_size = weight.size()
-            stride_row, stride_col = self.stride
-            pad = self.pad
-
-            if self.groups == self.in_channels:
-                groups = input_channel_size
             else:
-                groups = self.groups
-
-            weight_bitwidth = None
-            if self.is_quantized:
-                weight_bitwidth = self.weight_quantize.bitwidth
-            # Convert weights to C representation
-            param_header, param_def = convert_tensor_to_bytes_var(
-                weight, 
-                f"{var_name}_weight", 
-                weight_bitwidth
-            )   
-
-            layer_header = param_header
-            layer_param_def = param_def
-
-            q_type = None
-            if self.is_quantized:
-                q_type = self.weight_quantize.type
-
-            if q_type is None or q_type == QUANTIZATION_NONE:
                 layer_def = (
                     f"{self.__class__.__name__} {var_name}({input_channel_size}, "
                     f"{input_row_size}, {input_col_size}, {output_channel_size}, "
@@ -420,52 +357,215 @@ class Conv2d(Layer, nn.Conv2d):
                     "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
                     f"(float*){var_name}_weight, nullptr);\n"
                 )
-            elif q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
-                layer_def = (
-                    f"{self.__class__.__name__} {var_name}({input_channel_size}, "
-                    f"{input_row_size}, {input_col_size}, {output_channel_size}, "
-                    f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
-                    "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
-                    f"(int8_t*){var_name}_weight,  *(float*){var_name}_weight_scale, nullptr);\n"
-                )                
-                param_header, param_def = convert_tensor_to_bytes_var(
-                                            self.weight_quantize.scale,
-                                            f"{var_name}_weight_scale"
-                                        )
-                layer_header += param_header
-                layer_param_def += param_def
+        elif scheme == QuantizationScheme.DYNAMIC:
+            granularity = self.weight_quantize.granularity
+            
+            if self.bias is not None:
+                if granularity == QuantizationGranularity.PER_TENSOR:
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, (float*){var_name}_bias,  *(float*){var_name}_weight_scale);\n"
+                    )  
+                else:        
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, (float*){var_name}_bias,  (float*){var_name}_weight_scale);\n"
+                    )
+            else:
+                if granularity == QuantizationGranularity.PER_TENSOR:
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, nullptr,  *(float*){var_name}_weight_scale);\n"
+                    )  
+                else:        
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, nullptr,  (float*){var_name}_weight_scale);\n"
+                    )
+            param_header, param_def = convert_tensor_to_bytes_var(
+                                        self.weight_quantize.scale,
+                                        f"{var_name}_weight_scale"
+                                    )
+            layer_header += param_header
+            layer_param_def += param_def
 
-            elif q_type == STATIC_QUANTIZATION_PER_TENSOR:
-                layer_def = (
-                    f"{self.__class__.__name__} {var_name}({input_channel_size}, "
-                    f"{input_row_size}, {input_col_size}, {output_channel_size}, "
-                    f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
-                    "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
-                    f"{self.output_quantize.scale}, {self.output_quantize.zero_point}, "
-                    f"{self.input_quantize.zero_point}, (int8_t*){var_name}_weight, "
-                    f"nullptr, *(float*){var_name}_bias_scale);\n"
-                )
+        elif scheme == QuantizationScheme.STATIC:
+            granularity = self.weight_quantize.granularity
 
-                param_header, param_def = convert_tensor_to_bytes_var(
-                    self.output_quantize.scale, 
-                    f"{var_name}_output_scale"
-                )
-                layer_header += param_header
-                layer_param_def += param_def
+            if self.bias is not None:
+                if granularity == QuantizationGranularity.PER_TENSOR:
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, (int32_t*){var_name}_bias, "
+                        f"*(float*){var_name}_output_scale, *(int8_t*){var_name}_output_zero_point, "
+                        f"*(int8_t*){var_name}_input_zero_point, *(float*){var_name}_bias_scale);\n"
+                    )
+                else:
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, (int32_t*){var_name}_bias, "
+                        f"*(float*){var_name}_output_scale, *(int8_t*){var_name}_output_zero_point, "
+                        f"*(int8_t*){var_name}_input_zero_point, (float*){var_name}_bias_scale);\n"
+                    )
+            else:
+                if granularity == QuantizationGranularity.PER_TENSOR:
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, nullptr, "
+                        f"*(float*){var_name}_output_scale, *(int8_t*){var_name}_output_zero_point, "
+                        f"*(int8_t*){var_name}_input_zero_point, *(float*){var_name}_bias_scale);\n"
+                    )
+                else:
+                    layer_def = (
+                        f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+                        f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+                        f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+                        "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+                        f"(int8_t*){var_name}_weight, nullptr, "
+                        f"*(float*){var_name}_output_scale, *(int8_t*){var_name}_output_zero_point, "
+                        f"*(int8_t*){var_name}_input_zero_point, (float*){var_name}_bias_scale);\n"
+                    )
 
-                param_header, param_def = convert_tensor_to_bytes_var(
-                    self.output_quantize.zero_point, 
-                    f"{var_name}_output_zero_point"
-                )
-                layer_header += param_header
-                layer_param_def += param_def
+            param_header, param_def = convert_tensor_to_bytes_var(
+                self.output_quantize.scale, 
+                f"{var_name}_output_scale"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
 
-                param_header, param_def = convert_tensor_to_bytes_var(
-                    self.bias_quantize.scale, 
-                    f"{var_name}_bias_scale"
-                )
-                layer_header += param_header
-                layer_param_def += param_def
+            param_header, param_def = convert_tensor_to_bytes_var(
+                self.output_quantize.zero_point, 
+                f"{var_name}_output_zero_point"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
+
+            param_header, param_def = convert_tensor_to_bytes_var(
+                self.input_quantize.zero_point, 
+                f"{var_name}_input_zero_point"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
+
+
+            if self.bias is not None:
+                bias_scale = self.bias_quantize.scale
+            else:
+                bias_scale = self.input_quantize.scale * self.weight_quantize.scale
+            param_header, param_def = convert_tensor_to_bytes_var(
+                bias_scale,
+                f"{var_name}_bias_scale"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
+
+        # else:
+        #     weight = self.get_compression_parameters()
+
+        #     input_channel_size, input_row_size, input_col_size = input_shape
+
+        #     output_channel_size, _,\
+        #     kernel_row_size, kernel_col_size = weight.size()
+        #     stride_row, stride_col = self.stride
+        #     pad = self.pad
+
+        #     if self.groups == self.in_channels:
+        #         groups = input_channel_size
+        #     else:
+        #         groups = self.groups
+
+        #     weight_bitwidth = None
+        #     if self.is_quantized:
+        #         weight_bitwidth = self.weight_quantize.bitwidth
+        #     # Convert weights to C representation
+        #     param_header, param_def = convert_tensor_to_bytes_var(
+        #         weight, 
+        #         f"{var_name}_weight", 
+        #         weight_bitwidth
+        #     )   
+
+        #     layer_header = param_header
+        #     layer_param_def = param_def
+
+        #     q_type = None
+        #     if self.is_quantized:
+        #         q_type = self.weight_quantize.type
+
+        #     if q_type is None or q_type == QUANTIZATION_NONE:
+        #         layer_def = (
+        #             f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+        #             f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+        #             f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+        #             "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+        #             f"(float*){var_name}_weight, nullptr);\n"
+        #         )
+        #     elif q_type == DYNAMIC_QUANTIZATION_PER_TENSOR:
+        #         layer_def = (
+        #             f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+        #             f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+        #             f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+        #             "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+        #             f"(int8_t*){var_name}_weight,  *(float*){var_name}_weight_scale, nullptr);\n"
+        #         )                
+        #         param_header, param_def = convert_tensor_to_bytes_var(
+        #                                     self.weight_quantize.scale,
+        #                                     f"{var_name}_weight_scale"
+        #                                 )
+        #         layer_header += param_header
+        #         layer_param_def += param_def
+
+        #     elif q_type == STATIC_QUANTIZATION_PER_TENSOR:
+        #         layer_def = (
+        #             f"{self.__class__.__name__} {var_name}({input_channel_size}, "
+        #             f"{input_row_size}, {input_col_size}, {output_channel_size}, "
+        #             f"{kernel_row_size}, {kernel_col_size}, {stride_row}, {stride_col}, "
+        #             "{" f"{pad[0]}, {pad[1]}, {pad[2]}, {pad[3]}" "}, " f"{groups}, "
+        #             f"{self.output_quantize.scale}, {self.output_quantize.zero_point}, "
+        #             f"{self.input_quantize.zero_point}, (int8_t*){var_name}_weight, "
+        #             f"nullptr, *(float*){var_name}_bias_scale);\n"
+        #         )
+
+        #         param_header, param_def = convert_tensor_to_bytes_var(
+        #             self.output_quantize.scale, 
+        #             f"{var_name}_output_scale"
+        #         )
+        #         layer_header += param_header
+        #         layer_param_def += param_def
+
+        #         param_header, param_def = convert_tensor_to_bytes_var(
+        #             self.output_quantize.zero_point, 
+        #             f"{var_name}_output_zero_point"
+        #         )
+        #         layer_header += param_header
+        #         layer_param_def += param_def
+
+        #         param_header, param_def = convert_tensor_to_bytes_var(
+        #             self.bias_quantize.scale, 
+        #             f"{var_name}_bias_scale"
+        #         )
+        #         layer_header += param_header
+        #         layer_param_def += param_def
    
         layer_header += f"extern {self.__class__.__name__} {var_name};\n\n"
 

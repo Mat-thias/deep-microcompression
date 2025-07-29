@@ -485,12 +485,12 @@ class Sequential(nn.Sequential):
         # Configure workspace based on quantization
         # if getattr(self, "quantize_type", QUANTIZATION_NONE) != STATIC_QUANTIZATION_PER_TENSOR:
         
-        q_type = None
-        if "_dmc" in self.__dict__:
-            if "quantization" in self.__dict__["_dmc"]:
-                q_type = self.__dict__["_dmc"]["quantization"]["type"]
+        scheme = None
+        if self.is_quantized:
+            scheme = self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"]
+        
 
-        if q_type!= STATIC_QUANTIZATION_PER_TENSOR:
+        if scheme != QuantizationScheme.STATIC:
             workspace_header = (
                 f"#define MAX_OUTPUT_EVEN_SIZE {max_output_even_size}\n"
                 f"#define MAX_OUTPUT_ODD_SIZE {max_output_odd_size}\n"
@@ -520,18 +520,16 @@ class Sequential(nn.Sequential):
         )
         
         for layer_name, layer in self.layers.items():
-            if hasattr(layer, "convert_to_c"):
-                layers_def += f"    &{layer_name},\n"
 
-                layer_header, layer_def, layer_param_def = layer.convert_to_c(layer_name, input_shape)
-                layers_header += layer_header
+            layers_def += f"    &{layer_name},\n"
 
-                param_definition_file += layer_param_def
-                definition_file += layer_def 
+            layer_header, layer_def, layer_param_def = layer.convert_to_c(layer_name, input_shape)
+            layers_header += layer_header
 
-                _, input_shape = layer.get_output_tensor_shape(input_shape)
-            else:
-                raise RuntimeError(f"The cpp conversion of {layer.__class__.__name__} has not been implemented!")
+            param_definition_file += layer_param_def
+            definition_file += layer_def 
+
+            _, input_shape = layer.get_output_tensor_shape(input_shape)
         
         layers_def += "};\n"
         definition_file += layers_def
@@ -545,30 +543,30 @@ class Sequential(nn.Sequential):
 
 
 #################################################################################################################
-        # Generate test input data
-        if "_dmc" in self.__dict__ and "quantization" in self.__dict__["_dmc"] and self.__dict__["_dmc"]["quantization"]["type"] == STATIC_QUANTIZATION_PER_TENSOR:
-            test_input_def = f"\nconst uint8_t test_input[] = {{\n"
-            for line in torch.split(quantize_per_tensor_assy(
-                    self.test_input, 
-                    self.__dict__["_dmc"]["quantization"]["input_scale"],
-                    self.__dict__["_dmc"]["quantization"]["input_zero_point"],
-                    self.__dict__["_dmc"]["quantization"]["bitwidth"],
-                ).flatten(), 8):
-                test_input_def += "    " + ", ".join(
-                    [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
-                ) + ",\n"
-            test_input_def += "};\n"
-        else:
-            test_input_def = f"\nconst float test_input[] = {{\n"
-            for line in torch.split(self.test_input.flatten(), 8):
-                test_input_def += "    " + ", ".join(
-                    [f"{val:.4f}" for val in line]
-                ) + ",\n"
-            test_input_def += "};\n"
+        # # Generate test input data
+        # if "_dmc" in self.__dict__ and "quantization" in self.__dict__["_dmc"] and self.__dict__["_dmc"]["quantization"]["type"] == STATIC_QUANTIZATION_PER_TENSOR:
+        #     test_input_def = f"\nconst uint8_t test_input[] = {{\n"
+        #     for line in torch.split(quantize_per_tensor_assy(
+        #             self.test_input, 
+        #             self.__dict__["_dmc"]["quantization"]["input_scale"],
+        #             self.__dict__["_dmc"]["quantization"]["input_zero_point"],
+        #             self.__dict__["_dmc"]["quantization"]["bitwidth"],
+        #         ).flatten(), 8):
+        #         test_input_def += "    " + ", ".join(
+        #             [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
+        #         ) + ",\n"
+        #     test_input_def += "};\n"
+        # else:
+        #     test_input_def = f"\nconst float test_input[] = {{\n"
+        #     for line in torch.split(self.test_input.flatten(), 8):
+        #         test_input_def += "    " + ", ".join(
+        #             [f"{val:.4f}" for val in line]
+        #         ) + ",\n"
+        #     test_input_def += "};\n"
 
     
-        with open(path.join(include_dir, f"{var_name}_test_input.h"), "w") as file:
-            file.write(test_input_def)
+        # with open(path.join(include_dir, f"{var_name}_test_input.h"), "w") as file:
+        #     file.write(test_input_def)
 
 
 #################################################################################################################

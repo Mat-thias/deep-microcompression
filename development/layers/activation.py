@@ -17,7 +17,9 @@ from ..utils import (
     QuantizationGranularity,
 
     quantize_per_tensor_assy,
-    get_size_in_bits
+    get_size_in_bits,
+
+    convert_tensor_to_bytes_var
 )
 from .layer import Layer, Quantize
 
@@ -111,15 +113,23 @@ class ReLU(Layer, nn.ReLU):
         """
         input_size = input_shape.numel()
 
+        layer_param_def = ""
+        layer_header = ""
+
         if self.is_quantized and hasattr(self, "input_quantize"):
-            assert self.input_quantize.type == STATIC_QUANTIZATION_PER_TENSOR, f"{self.__class__.__name__} has a input_quantize and is not static quantize"
-            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, {self.input_quantize.zero_point});\n"
+            assert self.input_quantize.scheme == QuantizationScheme.STATIC, f"{self.__class__.__name__} has a input_quantize and is not static quantize"
+            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, *(float*){var_name}_input_zero_point);\n"
+
+            param_header, param_def = convert_tensor_to_bytes_var(
+                self.input_quantize.zero_point, 
+                f"{var_name}_input_zero_point"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
         else:
             layer_def = f"{self.__class__.__name__} {var_name}({input_size});\n"
 
-
-        layer_header = f"extern {self.__class__.__name__} {var_name};\n\n"
-        layer_param_def = ""
+        layer_header += f"extern {self.__class__.__name__} {var_name};\n\n"
         
         return layer_header, layer_def, layer_param_def
     
@@ -194,16 +204,34 @@ class ReLU6(Layer, nn.ReLU6):
             Tuple of (header declaration, layer definition, parameter definition)
         """
         input_size = input_shape.numel()
+
+
+        layer_param_def = ""
+        layer_header = ""
+
         if self.is_quantized and hasattr(self, "input_quantize"):
-            assert self.input_quantize.type == STATIC_QUANTIZATION_PER_TENSOR, f"{self.__class__.__name__} has a input_quantize and is not static quantize"
-            input_six_point = quantize_per_tensor_assy(torch.Tensor([6]), self.input_quantize.scale, self.input_quantize.zero_point).item()
-            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, {self.input_quantize.zero_point}, {input_six_point});\n"
-            
+            assert self.input_quantize.scheme == QuantizationScheme.STATIC, f"{self.__class__.__name__} has a input_quantize and is not static quantize"
+            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, *(float*){var_name}_input_zero_point, *(float*){var_name}_input_six_point);\n"
+
+            param_header, param_def = convert_tensor_to_bytes_var(
+                self.input_quantize.zero_point, 
+                f"{var_name}_input_zero_point"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
+
+            input_six_point = quantize_per_tensor_assy(torch.Tensor([6]), self.input_quantize.scale, self.input_quantize.zero_point)
+            param_header, param_def = convert_tensor_to_bytes_var(
+                input_six_point, 
+                f"{var_name}_input_six_point"
+            )
+            layer_header += param_header
+            layer_param_def += param_def
+
         else:
             layer_def = f"{self.__class__.__name__} {var_name}({input_size});\n"
 
-        layer_header = f"extern {self.__class__.__name__} {var_name};\n\n"
-        layer_param_def = ""
+        layer_header += f"extern {self.__class__.__name__} {var_name};\n\n"
         
         return layer_header, layer_def, layer_param_def
     

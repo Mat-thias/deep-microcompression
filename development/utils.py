@@ -408,8 +408,24 @@ def int4_to_bytes(data: list) -> list:
     """
     byte = 0
     for val in data[::-1]:
-        byte = (byte << 4 | val & 0x0F)
+        byte = ((byte << 4) | (val & 0x0F))
     return list(struct.pack("<b", byte))
+
+
+def int2_to_bytes(data: list) -> list:
+    """Pack list of 2-bit values into bytes
+    
+    Args:
+        data: List of 4-bit values to pack
+        
+    Returns:
+        List of bytes
+    """
+    byte = 0
+    for val in data[::-1]:
+        byte = ((byte << 2) | (val & 0x03))
+    return list(struct.pack("<b", byte))
+
 
 def convert_tensor_to_bytes_var(tensor: torch.Tensor, 
                                var_name: str, 
@@ -466,7 +482,7 @@ def convert_tensor_to_bytes_var(tensor: torch.Tensor,
 
             if len(line)%data_per_byte != 0:
                 data = []
-                i += 1
+                i = len(line)//data_per_byte
                 for pos in range(len(line)%data_per_byte):
                     data.append(line[(i*data_per_byte)+pos])
                     bytes.append(byte_convert(data))
