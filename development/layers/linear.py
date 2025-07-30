@@ -136,6 +136,9 @@ class Linear(Layer, nn.Linear):
         return keep_current_channel_index
 
 
+    def get_prune_possible_hypermeters(self):
+        return range(self.out_features)
+
     @torch.no_grad()
     def init_quantize(self, bitwidth, scheme, granularity):
         if not self.is_pruned_channel:

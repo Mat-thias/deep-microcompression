@@ -158,8 +158,13 @@ class Conv2d(Layer, nn.Conv2d):
             setattr(self, "bias_prune_channel", Prune_Channel(
                 module=self, keep_current_channel_index=keep_current_channel_index
             ))
-
         return keep_current_channel_index
+
+
+    def get_prune_possible_hypermeters(self):
+        if self.groups == self.out_channels:
+            return None
+        return range(self.out_channels)
 
 
     @torch.no_grad()

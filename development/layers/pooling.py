@@ -60,6 +60,9 @@ class MaxPool2d(Layer, nn.MaxPool2d):
         return keep_prev_channel_index
 
 
+    def get_prune_possible_hypermeters(self):
+        return None
+
     def init_quantize(self, bitwidth, scheme, granularity):
         # Nothing to do
         pass
@@ -159,6 +162,10 @@ class AvgPool2d(Layer, nn.AvgPool2d):
         # Nothing to do
         return keep_prev_channel_index
 
+
+    def get_prune_possible_hypermeters(self):
+        return None
+    
 
     def init_quantize(self, bitwidth, scheme, granularity):
         # Nothing to do

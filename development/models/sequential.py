@@ -90,20 +90,6 @@ class Sequential(nn.Sequential):
         Returns:
             Output tensor after passing through all layers
         """
-################################################################################################
-        # Saving the a test input data
-        import random
-        index = random.randint(0, input.size(0)-1)
-        # print(f"Using this {index}")
-
-        if not hasattr(self, "test_input"): 
-            # index = 0
-            pass
-
-        test_input = input[index].unsqueeze(dim=0).cpu()
-        setattr(self, "test_input", test_input)
-################################################################################################
-
         for i, layer in enumerate(self):
             # print(f"Layer {i} ({layer.__class__.__name__}): input shape = {input.shape} kernel_size {getattr(layer, "kernel_size", "nan")} stride {getattr(layer, "stride", "nan")} padding {getattr(layer, "padding", "nan")}")
             input = layer(input)
@@ -269,6 +255,13 @@ class Sequential(nn.Sequential):
         metric_val = 0
         data_len = 0
 
+
+################################################################################################
+        # Saving the a test input data
+        setattr(self, "test_input", next(iter(data_loader))[0])
+################################################################################################
+
+
         self.eval()
         for X, y_true in tqdm(data_loader):
             X = X.to(device)
@@ -299,20 +292,30 @@ class Sequential(nn.Sequential):
 
                     sparsity = prune_channel_config.get("sparsity")
 
-                    if isinstance(sparsity, float):
-                        if sparsity == 0.0:
+                    if isinstance(sparsity, (float, int)):
+                        if sparsity == 0:
                             continue
                         layer_sparsity = sparsity
-                        sparsity = OrderedDict()
+                        sparsity = dict()
                         for name in self.layers.keys():
                             sparsity[name] = layer_sparsity
 
-                    elif isinstance(sparsity, OrderedDict):
+                    elif isinstance(sparsity, dict):
+                        for name, layer_sparsity in sparsity.items():
+                            if not isinstance(layer_sparsity, (float, int)):
+                                raise TypeError(f"layer sparsity has to be of type of float or int not {type(layer_sparsity)} for layer {name}!")
+                            if name not in self.layers.keys():
+                                raise NameError(f"Found unknown layer name {name}")
+                            if not self.layers[name].is_prunable():
+                                raise ValueError(f"layer of name {name} is not prunable")
+                            if not isinstance(layer_sparsity, float) and layer_sparsity not in self.layers[name].get_prune_possible_hypermeters():
+                                raise ValueError(f"Recieved a layer_sparsity of {layer_sparsity} ")
                         for name in self.layers.keys():
+                            # if name not in sparsity and self.layers[name].is_prunable():
                             if name not in sparsity:
-                                sparsity[name] = 0.
+                                sparsity[name] = 0
                     else:
-                        raise TypeError(f"prune sparsity has to be of type of float or orderdict not {type(sparsity)}!")
+                        raise TypeError(f"prune sparsity has to be of type of float or dict not {type(sparsity)}!")
                     
                     prune_channel_config["sparsity"] = sparsity
 
@@ -343,7 +346,8 @@ class Sequential(nn.Sequential):
         for compression_type, compression_type_param in config.items():
             if compression_type == "prune_channel":
 
-                if not isinstance(config["prune_channel"]["sparsity"], float) or config["prune_channel"]["sparsity"] != 0.:
+                if not isinstance(config["prune_channel"]["sparsity"], (float, int)) or config["prune_channel"]["sparsity"] != 0:
+
 
                     def prune_channel_layer(layer):
                         layer.is_pruned_channel = True
@@ -398,6 +402,13 @@ class Sequential(nn.Sequential):
             is_output_layer=True, metric=metric
         )
         return 
+    
+    def get_prune_possible_hypermeters(self):
+        prune_possible_hypermeters = dict()
+
+        for name, layer in self.layers.items():
+            prune_possible_hypermeters[name] = layer.get_prune_possible_hypermeters()
+        return prune_possible_hypermeters
     
     def init_quantize(self, calibration_data=None):
 
@@ -540,10 +551,18 @@ class Sequential(nn.Sequential):
         write_str_to_c_file(header_file, f"{var_name}.h", include_dir)
         write_str_to_c_file(definition_file, f"{var_name}_def.cpp", src_dir)
         write_str_to_c_file(param_definition_file, f"{var_name}_params.cpp", src_dir)
+        return
 
 
-#################################################################################################################
-        # # Generate test input data
+    @torch.no_grad
+    def test(self, device:str = "cpu", include_dir="./", src_dir="./", var_name="model"):
+        # self.cpu()
+        # if hasattr(self, "quantize_type") and (getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_TENSOR
+        #                                            or getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_CHANNEL):
+        #     return self(quantize_per_tensor_assy(
+        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantize_bitwidth))
+        
+        # Generate test input data
         # if "_dmc" in self.__dict__ and "quantization" in self.__dict__["_dmc"] and self.__dict__["_dmc"]["quantization"]["type"] == STATIC_QUANTIZATION_PER_TENSOR:
         #     test_input_def = f"\nconst uint8_t test_input[] = {{\n"
         #     for line in torch.split(quantize_per_tensor_assy(
@@ -557,31 +576,22 @@ class Sequential(nn.Sequential):
         #         ) + ",\n"
         #     test_input_def += "};\n"
         # else:
-        #     test_input_def = f"\nconst float test_input[] = {{\n"
-        #     for line in torch.split(self.test_input.flatten(), 8):
-        #         test_input_def += "    " + ", ".join(
-        #             [f"{val:.4f}" for val in line]
-        #         ) + ",\n"
-        #     test_input_def += "};\n"
 
-    
-        # with open(path.join(include_dir, f"{var_name}_test_input.h"), "w") as file:
-        #     file.write(test_input_def)
+        import random
+        index = random.randint(0, self.test_input.size(0)-1)
+
+        test_input_def = f"\nconst float test_input[] = {{\n"
+        for line in torch.split(self.test_input[index].flatten(), 8):
+            test_input_def += "    " + ", ".join(
+                [f"{val:.4f}" for val in line]
+            ) + ",\n"
+        test_input_def += "};\n"
 
 
-#################################################################################################################
+        with open(path.join(include_dir, f"{var_name}_test_input.h"), "w") as file:
+            file.write(test_input_def)
 
-        return
-    
-    @torch.no_grad
-    def test(self, device:str = "cpu"):
-        # self.cpu()
-        # if hasattr(self, "quantize_type") and (getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_TENSOR
-        #                                            or getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_CHANNEL):
-        #     return self(quantize_per_tensor_assy(
-        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantize_bitwidth))
-        
-        return self(self.test_input.clone().to(device))
+        return self(self.test_input[index].unsqueeze(dim=0).clone().to(device))
 
 
 

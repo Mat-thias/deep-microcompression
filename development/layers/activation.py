@@ -75,6 +75,9 @@ class ReLU(Layer, nn.ReLU):
         super().init_prune_channel()
         return keep_prev_channel_index
 
+    def get_prune_possible_hypermeters(self):
+        return None
+    
 
     def init_quantize(self, bitwidth, scheme, granularity):
 
@@ -171,6 +174,9 @@ class ReLU6(Layer, nn.ReLU6):
         return keep_prev_channel_index
 
 
+    def get_prune_possible_hypermeters(self):
+        return None
+    
     def init_quantize(self, bitwidth, scheme, granularity):
         if scheme == QuantizationScheme.STATIC:
             setattr(self, "input_quantize", Quantize(

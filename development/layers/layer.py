@@ -46,6 +46,13 @@ class Layer(ABC):
     def init_prune_channel(self):
         pass
 
+    def is_prunable(self):
+        return bool(self.get_prune_possible_hypermeters())
+
+    @abstractmethod
+    def get_prune_possible_hypermeters(self):
+        pass
+
     @abstractmethod
     def init_quantize(self, q_type, bitwidth):
         pass
