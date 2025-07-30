@@ -49,7 +49,7 @@ class ReLU(Layer, nn.ReLU):
             if self.is_quantized:
                 if hasattr(self, "input_quantize"):
                     input = self.input_quantize(input)
-        
+
         return super().forward(input)
     
 

@@ -1,17 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Iterable, Callable
+from typing import Any, Optional, Iterable, Callable, Tuple
 from math import prod
 
 import torch
 from torch import nn
 
-from ..models.sequential import Sequential
+# from ..models.sequential import Sequential
 
 from ..utils import (
 
     QuantizationScheme,
     QuantizationScaleType,
     QuantizationGranularity,
+
+    get_quantize_scale_sy,
+    get_quantize_scale_zero_point_assy,
 
     get_quantize_scale_per_tensor_sy,
     get_quantize_scale_zero_point_per_tensor_assy,
@@ -71,7 +74,7 @@ class Layer(ABC):
 
     @abstractmethod
     def get_output_tensor_shape(self, input_shape):
-        print("called layer")
+        pass
 
     @abstractmethod
     def convert_to_c(self, var_name):
@@ -84,7 +87,7 @@ class Quantize:
 
     def __init__(
         self, 
-        module: Sequential, 
+        module,#: Sequential, 
         bitwidth: int, 
         scheme: QuantizationScheme, 
         granularity: QuantizationGranularity, 
@@ -99,54 +102,88 @@ class Quantize:
         self.scheme = scheme
         self.scale_type = scale_type
         self.granularity = granularity
-
-        self.scale = None
-        self.zero_point = None
+        self.rmin = None
+        self.rmax = None 
 
         self.base = base
 
         if base is not None:
             if base_accumulator is None:
                 if scale_type == QuantizationScaleType.ASSYMMETRIC:
-                    print(base)
-                    self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base]), sum([b.zero_point for b in base])
+                    self.base_accumulator: Callable[[Iterable["Quantize"]], Tuple[torch.Tensor, torch.Tensor]] = lambda base : prod([b.scale for b in base]), sum([b.zero_point for b in base])
                 else:
-                    self.base_accumulator = lambda x, bitdwidth, base : prod([b.scale for b in base])
+                    self.base_accumulator: Callable[[Iterable["Quantize"]], torch.Tensor] = lambda base : prod([b.scale for b in base])
             else:
                 self.base_accumulator = base_accumulator
 
         self.prune_channel = prune_channel
+
+    @property
+    def scale(self):
+        if self.base is None:
+            if self.scale_type == QuantizationScaleType.SYMMETRIC:
+                scale = get_quantize_scale_sy(self.rmax, self.bitwidth)
+            else:
+                scale = get_quantize_scale_zero_point_assy(self.rmax, self.rmin, self.bitwidth)[0]
+        else:
+            if self.scale_type == QuantizationScaleType.SYMMETRIC:
+                scale = self.base_accumulator(self.base)    
+            else:
+                scale = self.base_accumulator(self.base)[0]
+        scale[scale == 0.] = 1.
+        return scale
+    
+    @property
+    def zero_point(self):
+        assert self.scale_type == QuantizationScaleType.ASSYMMETRIC, f"scale type should be {QuantizationScaleType.ASSYMMETRIC}"
+        if self.base is None:
+            return get_quantize_scale_zero_point_assy(self.rmax, self.rmin, self.bitwidth)[1]
+        else:
+            return self.base_accumulator(self.base)[1]
 
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         if self.module.training:
             self.update_parameters(x)
         return self.fake_apply(x)
-                 
+ 
  
     def update_parameters(self, x: torch.Tensor) -> None:
-        if self.base is None:
-            if self.scale_type == QuantizationScaleType.SYMMETRIC:
-                self.scale = get_quantize_scale_per_tensor_sy(x, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
-                             get_quantize_scale_per_channel_sy(x, self.bitwidth)
-            else:
-                self.scale, self.zero_point = get_quantize_scale_zero_point_per_tensor_assy(x, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
-                                              get_quantize_scale_zero_point_per_channel_assy(x, self.bitwidth)
+        if self.scale_type == QuantizationScaleType.SYMMETRIC:
+            self.rmax = x.max() if self.granularity == QuantizationGranularity.PER_TENSOR else x.abs().view(x.size(0), -1).max(dim=1)[0]
         else:
-            if self.scale_type == QuantizationScaleType.SYMMETRIC:
-                self.scale = self.base_accumulator(x, self.bitwidth, self.base)    
-            else:
-                self.scale, self.zero_point = self.base_accumulator(x, self.bitwidth, self.base)    
+            self.rmax = x.max() if self.granularity == QuantizationGranularity.PER_TENSOR else x.view(x.size(0), -1).max(dim=1)[0]
+            self.rmin = x.min() if self.granularity == QuantizationGranularity.PER_TENSOR else x.view(x.size(0), -1).min(dim=1)[0]
+        # print(self.scale, self.module, self.granularity, self.scale_type, "herrrrkkkkkk")
+        # print(self.rmax, self.module, self.granularity, self.scale_type, "herrrrkkkkkk")
+
+        # if self.base is None:
+        #     if self.scale_type == QuantizationScaleType.SYMMETRIC:
+        #         self.rmax = x.max()
+        #         # self.scale = get_quantize_scale_per_tensor_sy(x, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
+        #         #              get_quantize_scale_per_channel_sy(x, self.bitwidth)
+        #     else:
+        #         self.rmax = x.max()
+        #         self.rmin = x.min()
+        #         # self.scale, self.zero_point = get_quantize_scale_zero_point_per_tensor_assy(x, self.bitwidth) if self.granularity == QuantizationGranularity.PER_TENSOR else \
+        #         #                               get_quantize_scale_zero_point_per_channel_assy(x, self.bitwidth)
+        # else:
+        #     if self.scale_type == QuantizationScaleType.SYMMETRIC:
+        #         self.scale = self.base_accumulator(x, self.bitwidth, self.base)    
+        #     else:
+        #         self.scale, self.zero_point = self.base_accumulator(x, self.bitwidth, self.base)    
                 
 
     def fake_apply(self, x: torch.Tensor) -> torch.Tensor:
                
         scale = self.scale
-        zero_point = self.zero_point
+        if self.scale_type == QuantizationScaleType.ASSYMMETRIC:
+            zero_point = self.zero_point
 
         if self.granularity == QuantizationGranularity.PER_CHANNEL and self.module.is_pruned_channel:
             scale = self.prune_channel.fake_apply(scale)
-            scale[scale == 0.] = 1.
+            scale[scale == 0] = 1
+            
             if self.scale_type == QuantizationScaleType.ASSYMMETRIC: 
                 zero_point = self.prune_channel.fake_apply(zero_point) 
         
@@ -160,7 +197,8 @@ class Quantize:
         dtype = torch.int32 if self.bitwidth > 8 else torch.int8
         
         scale = self.scale
-        zero_point = self.zero_point
+        if self.scale_type == QuantizationScaleType.ASSYMMETRIC:
+            zero_point = self.zero_point
 
         if self.granularity == QuantizationGranularity.PER_CHANNEL and self.module.is_pruned_channel:
             scale = self.prune_channel.apply(scale)
@@ -177,7 +215,7 @@ class Prune_Channel:
 
     def __init__(
         self, 
-        module: Sequential, 
+        module,#: Sequential, 
         keep_current_channel_index: torch.Tensor, 
         keep_prev_channel_index: Optional[torch.Tensor]=None
     ) -> None:

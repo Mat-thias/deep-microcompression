@@ -36,8 +36,7 @@ class Flatten(Layer, nn.Flatten):
             
         Returns:
             Flattened tensor according to start_dim and end_dim
-        """
-        
+        """        
         # return input.flatten(self.start_dim, self.end_dim)
         return super().forward(input)
     

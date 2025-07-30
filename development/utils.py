@@ -64,6 +64,24 @@ def get_bitwidth_range(bitwidth: int) -> Tuple[int, int]:
     qmax = (2 ** (bitwidth - 1)) - 1
     return qmin, qmax
 
+def get_quantize_scale_sy(rmax, bitwidth) -> torch.Tensor:
+    _, qmax = get_bitwidth_range(bitwidth)
+    scale = (rmax / qmax)
+    scale[scale == 0] = 1
+    return scale
+
+def get_quantize_scale_zero_point_assy(rmax, rmin, bitwidth) -> Tuple[torch.Tensor, torch.Tensor]:
+    qmin, qmax = get_bitwidth_range(bitwidth)
+    scale = (rmax - rmin) / (qmax - qmin)
+    scale_zero_index = (scale == 0)
+    scale[scale_zero_index] = 1
+
+    # zero_point = torch.round(qmin - (rmin / scale))
+    zero_point = round_ste(qmin - (rmin / scale))
+    zero_point[scale_zero_index] = 0
+    return scale, zero_point
+
+
 def get_quantize_scale_per_tensor_sy(tensor_real: torch.Tensor, 
                                    bitwidth: int = 8, 
                                    metric: str = "l2") -> torch.Tensor:
@@ -80,6 +98,7 @@ def get_quantize_scale_per_tensor_sy(tensor_real: torch.Tensor,
     _, qmax = get_bitwidth_range(bitwidth)
     rmax = tensor_real.abs().max()
     scale = (rmax / qmax)
+    scale[scale == 0] = 1
     return scale
 
 def get_quantize_scale_zero_point_per_tensor_assy(tensor_real: torch.Tensor, 
@@ -100,9 +119,12 @@ def get_quantize_scale_zero_point_per_tensor_assy(tensor_real: torch.Tensor,
     rmax = tensor_real.max()
     
     scale = (rmax - rmin) / (qmax - qmin)
+    scale_zero_index = (scale == 0)
+    scale[scale_zero_index] = 1
+
     # zero_point = torch.round(qmin - (rmin / scale))
     zero_point = round_ste(qmin - (rmin / scale))
-    
+    zero_point[scale_zero_index] = 0
     return scale, zero_point
 
 
@@ -122,6 +144,7 @@ def get_quantize_scale_per_channel_sy(tensor_real: torch.Tensor,
     _, qmax = get_bitwidth_range(bitwidth)
     rmax = tensor_real.abs().view(tensor_real.size(0), -1).max(dim=1)[0]
     scale = (rmax / qmax)
+    scale[scale == 0] = 1
     return scale
 
 def get_quantize_scale_zero_point_per_channel_assy(tensor_real: torch.Tensor, 
@@ -142,8 +165,12 @@ def get_quantize_scale_zero_point_per_channel_assy(tensor_real: torch.Tensor,
     rmax = tensor_real.view(tensor_real.size(0), -1).max(dim=1)[0]
     
     scale = (rmax - rmin) / (qmax - qmin)
+    scale_zero_index = (scale == 0)
+    scale[scale_zero_index] = 1
+    
     zero_point = round_ste(qmin - (rmin / scale))
     # zero_point = torch.round(qmin - (rmin / scale))
+    zero_point[scale_zero_index] = 0
     
     return scale, zero_point
 
@@ -427,7 +454,7 @@ def int2_to_bytes(data: list) -> list:
     return list(struct.pack("<b", byte))
 
 def pack_int_to_byte(byte_list, bitwidth):
-    assert len(byte_list) == 8 // bitwidth, f"byte list of lenght {len(byte_list)} cannot be pack into 8 bit withs bitwidth {bitwidth}"
+    assert len(byte_list) <= 8 // bitwidth, f"byte list of lenght {len(byte_list)} cannot be pack into 8 bit withs bitwidth {bitwidth}"
     shift = bitwidth
     mask = (1 << bitwidth) - 1
     byte = 0

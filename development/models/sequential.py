@@ -447,13 +447,21 @@ class Sequential(nn.Sequential):
             values = list(flat_dict.values())
             product = itertools.product(*values)
 
-            return [
-                dict(zip(keys, compression_comb)) for compression_comb in product if self.is_compression_config_valid(
-                                                                                                self.decode_compression_dict_hyperparameter(dict(zip(keys, compression_comb))))]
-        
+            return [dict(zip(keys, compression_comb)) for compression_comb in product]
+            # return [
+            #     dict(zip(keys, compression_comb)) for compression_comb in product if self.is_compression_config_valid(
+            #                                                                                     self.decode_compression_dict_hyperparameter(dict(zip(keys, compression_comb))))]
+        # return flatten_dict({
+        #     "prune_channel" : {
+        #         "sparsity" : self.get_prune_channel_possible_hypermeters(),
+        #         "metric" : ["l2", "l1"],
+        #     },
+        #     "quantize" : self.get_quantize_possible_hyperparameters()
+        # })
+
         return get_all_combinations(flatten_dict({
             "prune_channel" : {
-                "sparsity" : self.get_prune_channel_possible_hypermeters(),
+                # "sparsity" : self.get_prune_channel_possible_hypermeters(),
                 "metric" : ["l2", "l1"],
             },
             "quantize" : self.get_quantize_possible_hyperparameters()
@@ -495,7 +503,7 @@ class Sequential(nn.Sequential):
         self.train()
         if scheme == QuantizationScheme.STATIC:
             self(calibration_data)
-
+        return
 
     def get_size_in_bits(self):
         size = 0
