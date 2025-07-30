@@ -5,6 +5,8 @@ from math import prod
 import torch
 from torch import nn
 
+from ..models.sequential import Sequential
+
 from ..utils import (
 
     QuantizationScheme,
@@ -47,10 +49,10 @@ class Layer(ABC):
         pass
 
     def is_prunable(self):
-        return bool(self.get_prune_possible_hypermeters())
+        return bool(self.get_prune_channel_possible_hypermeters())
 
     @abstractmethod
-    def get_prune_possible_hypermeters(self):
+    def get_prune_channel_possible_hypermeters(self):
         pass
 
     @abstractmethod
@@ -82,7 +84,7 @@ class Quantize:
 
     def __init__(
         self, 
-        module: Layer, 
+        module: Sequential, 
         bitwidth: int, 
         scheme: QuantizationScheme, 
         granularity: QuantizationGranularity, 
@@ -175,7 +177,7 @@ class Prune_Channel:
 
     def __init__(
         self, 
-        module: Layer, 
+        module: Sequential, 
         keep_current_channel_index: torch.Tensor, 
         keep_prev_channel_index: Optional[torch.Tensor]=None
     ) -> None:

@@ -9,7 +9,7 @@ __all__ = [
 
 import copy
 from os import path
-
+import itertools
 from typing import (
     List, Dict, OrderedDict, Iterable, Callable, Optional, Union, Any
 )
@@ -284,59 +284,7 @@ class Sequential(nn.Sequential):
         calibration_data = None
     ) -> "Sequential":
         
-        def is_config_valid():
-            for configuration_type in config.keys():
-
-                if configuration_type == "prune_channel":
-                    prune_channel_config = config.get("prune_channel")
-
-                    sparsity = prune_channel_config.get("sparsity")
-
-                    if isinstance(sparsity, (float, int)):
-                        if sparsity == 0:
-                            continue
-                        layer_sparsity = sparsity
-                        sparsity = dict()
-                        for name in self.layers.keys():
-                            sparsity[name] = layer_sparsity
-
-                    elif isinstance(sparsity, dict):
-                        for name, layer_sparsity in sparsity.items():
-                            if not isinstance(layer_sparsity, (float, int)):
-                                raise TypeError(f"layer sparsity has to be of type of float or int not {type(layer_sparsity)} for layer {name}!")
-                            if name not in self.layers.keys():
-                                raise NameError(f"Found unknown layer name {name}")
-                            if not self.layers[name].is_prunable():
-                                raise ValueError(f"layer of name {name} is not prunable")
-                            if not isinstance(layer_sparsity, float) and layer_sparsity not in self.layers[name].get_prune_possible_hypermeters():
-                                raise ValueError(f"Recieved a layer_sparsity of {layer_sparsity} ")
-                        for name in self.layers.keys():
-                            # if name not in sparsity and self.layers[name].is_prunable():
-                            if name not in sparsity:
-                                sparsity[name] = 0
-                    else:
-                        raise TypeError(f"prune sparsity has to be of type of float or dict not {type(sparsity)}!")
-                    
-                    prune_channel_config["sparsity"] = sparsity
-
-                elif configuration_type == "quantize":
-                    quantize_config = config.get("quantize")
-                    scheme = quantize_config["scheme"]
-                    granulatity = quantize_config["granularity"]
-                    bitwidth = quantize_config["bitwidth"]
-                    
-                    if bitwidth is not None and bitwidth > 8:
-                        raise ValueError(f"Invalid quantization bitwidth")
-
-                    if scheme == QuantizationScheme.NONE and (bitwidth is not None or granulatity is not None) or \
-                        (bitwidth is None or granulatity is None) and scheme != QuantizationScheme.NONE:
-                        raise ValueError("When quantization scheme is NONE, bitwidth and granularity has to be None and vice versa.")
-                    
-                else:
-                    raise ValueError(f"Invalid configuration scheme of {configuration_type}")                
-            return True
-
-        if not is_config_valid():
+        if not self.is_compression_config_valid(config):
             raise ValueError("Invalid compression configuration!")
         
         model = copy.deepcopy(self)
@@ -403,12 +351,134 @@ class Sequential(nn.Sequential):
         )
         return 
     
-    def get_prune_possible_hypermeters(self):
+
+    def is_compression_config_valid(self, compression_config):
+        for configuration_type in compression_config.keys():
+
+            if configuration_type == "prune_channel":
+                prune_channel_config = compression_config.get("prune_channel")
+
+                sparsity = prune_channel_config.get("sparsity")
+
+                if isinstance(sparsity, (float, int)):
+                    if sparsity == 0:
+                        continue
+                    layer_sparsity = sparsity
+                    sparsity = dict()
+                    for name in self.layers.keys():
+                        sparsity[name] = layer_sparsity
+
+                elif isinstance(sparsity, dict):
+                    for name, layer_sparsity in sparsity.items():
+                        if not isinstance(layer_sparsity, (float, int)):
+                            return False
+                            # raise TypeError(f"layer sparsity has to be of type of float or int not {type(layer_sparsity)} for layer {name}!")
+                        if name not in self.layers.keys():
+                            return False
+                            # raise NameError(f"Found unknown layer name {name}")
+                        if not self.layers[name].is_prunable():
+                            return False
+                            # raise ValueError(f"layer of name {name} is not prunable")
+                        if not isinstance(layer_sparsity, float) and layer_sparsity not in self.layers[name].get_prune_channel_possible_hypermeters():
+                            return False
+                            # raise ValueError(f"Recieved a layer_sparsity of {layer_sparsity} ")
+                    for name in self.layers.keys():
+                        # if name not in sparsity and self.layers[name].is_prunable():
+                        if name not in sparsity:
+                            sparsity[name] = 0
+                else:
+                    return False
+                    # raise TypeError(f"prune sparsity has to be of type of float or dict not {type(sparsity)}!")
+                
+                prune_channel_config["sparsity"] = sparsity
+
+            elif configuration_type == "quantize":
+                quantize_config = compression_config.get("quantize")
+                scheme = quantize_config["scheme"]
+                granulatity = quantize_config["granularity"]
+                bitwidth = quantize_config["bitwidth"]
+                
+                if bitwidth is not None and bitwidth > 8:
+                    return False
+                    # raise ValueError(f"Invalid quantization bitwidth")
+
+                if scheme == QuantizationScheme.NONE and (bitwidth is not None or granulatity is not None) or \
+                    (bitwidth is None or granulatity is None) and scheme != QuantizationScheme.NONE:
+                    return False
+                    # raise ValueError("When quantization scheme is NONE, bitwidth and granularity has to be None and vice versa.")
+                
+            else:
+                return False
+                # raise ValueError(f"Invalid configuration scheme of {configuration_type}")                
+        return True
+
+    def get_prune_channel_possible_hypermeters(self):
         prune_possible_hypermeters = dict()
 
         for name, layer in self.layers.items():
-            prune_possible_hypermeters[name] = layer.get_prune_possible_hypermeters()
+            layer_prune_possible_hypermeters = layer.get_prune_channel_possible_hypermeters()
+            if layer_prune_possible_hypermeters is not None:
+                prune_possible_hypermeters[name] = layer_prune_possible_hypermeters
         return prune_possible_hypermeters
+    
+    def get_quantize_possible_hyperparameters(self):
+        return {
+            "scheme" : [QuantizationScheme.NONE, QuantizationScheme.DYNAMIC, QuantizationScheme.STATIC],
+            "granularity": [None, QuantizationGranularity.PER_TENSOR, QuantizationGranularity.PER_CHANNEL],
+            "bitwidth" : [None, 2, 4, 8]
+        }
+    
+    def get_all_compression_hyperparameter(self):
+
+        def flatten_dict(dic, parent_name=""):
+            flat_dic = {}
+            for name, value in dic.items():
+                full_name = f"{parent_name}.{name}" if parent_name else f"{name}"
+                if isinstance(value, dict):
+                    flat_dic.update(flatten_dict(value, full_name))
+                elif isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+                    flat_dic[full_name] = value
+                else:
+                    raise ValueError(f"Recieved {type(value)} for {full_name}, it should be an Iterable, which is not a dict or str!")
+            return flat_dic
+
+        def get_all_combinations(flat_dict: dict[str, object]) -> list[dict[str, object]]:
+            keys = list(flat_dict.keys())
+            values = list(flat_dict.values())
+            product = itertools.product(*values)
+
+            return [
+                dict(zip(keys, compression_comb)) for compression_comb in product if self.is_compression_config_valid(
+                                                                                                self.decode_compression_dict_hyperparameter(dict(zip(keys, compression_comb))))]
+        
+        return get_all_combinations(flatten_dict({
+            "prune_channel" : {
+                "sparsity" : self.get_prune_channel_possible_hypermeters(),
+                "metric" : ["l2", "l1"],
+            },
+            "quantize" : self.get_quantize_possible_hyperparameters()
+        }))
+
+
+    def decode_compression_dict_hyperparameter(self, compression_dict):
+
+        compression_config = dict()
+        for key, value in compression_dict.items():
+            names = key.split(".")
+            current_level = compression_config
+
+            while len(names) > 0:
+                current_name = names[0]
+                if len(names) == 1:
+                    current_level[current_name] = value
+                else:
+                    if current_name not in current_level:
+                        current_level[current_name] = dict()
+                    current_level = current_level[current_name]
+                names.pop(0)
+
+        return compression_config
+        
     
     def init_quantize(self, calibration_data=None):
 

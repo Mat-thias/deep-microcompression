@@ -161,7 +161,7 @@ class Conv2d(Layer, nn.Conv2d):
         return keep_current_channel_index
 
 
-    def get_prune_possible_hypermeters(self):
+    def get_prune_channel_possible_hypermeters(self):
         if self.groups == self.out_channels:
             return None
         return range(self.out_channels)

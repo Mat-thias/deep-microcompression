@@ -136,7 +136,7 @@ class Linear(Layer, nn.Linear):
         return keep_current_channel_index
 
 
-    def get_prune_possible_hypermeters(self):
+    def get_prune_channel_possible_hypermeters(self):
         return range(self.out_features)
 
     @torch.no_grad()
