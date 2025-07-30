@@ -426,6 +426,14 @@ def int2_to_bytes(data: list) -> list:
         byte = ((byte << 2) | (val & 0x03))
     return list(struct.pack("<b", byte))
 
+def pack_int_to_byte(byte_list, bitwidth):
+    assert len(byte_list) == 8 // bitwidth, f"byte list of lenght {len(byte_list)} cannot be pack into 8 bit withs bitwidth {bitwidth}"
+    shift = bitwidth
+    mask = (1 << bitwidth) - 1
+    byte = 0
+    for value in reversed(byte_list):
+        byte = ((byte << shift) | (value & mask))
+    return list(struct.pack("<b", byte))
 
 def convert_tensor_to_bytes_var(tensor: torch.Tensor, 
                                var_name: str, 
@@ -462,30 +470,33 @@ def convert_tensor_to_bytes_var(tensor: torch.Tensor,
     else:
         # Special handling for packed data (4-bit, 2-bit, etc.)
         data_per_byte = 8 // bitwidth
+            # for i in range(math.ceil(len(line)/data_per_byte)):
         tensor = tensor.flatten()
 
-        if bitwidth == 4:
-            byte_convert = int4_to_bytes
-        elif bitwidth == 2:
-            byte_convert = int2_to_bytes
-        else:
-            raise RuntimeError(f"Conversion of model to quantized {bitwidth} bitwidth not support with packing!!")
+        # if bitwidth == 4:
+        #     byte_convert = int4_to_bytes
+        # elif bitwidth == 2:
+        #     byte_convert = int2_to_bytes
+        # else:
+        #     raise RuntimeError(f"Conversion of model to quantized {bitwidth} bitwidth not support with packing!!")
 
         for line in torch.split(tensor.flatten(), INT8_BYTE_PER_LINE * data_per_byte):
             bytes = []
-            # for i in range(math.ceil(len(line)/data_per_byte)):
+            data_per_byte = 8 // bitwidth
             for i in range(len(line)//data_per_byte):
                 data = []
                 for pos in range(data_per_byte):
                     data.append(line[(i*data_per_byte)+pos])
-                bytes.append(byte_convert(data))
+                # bytes.append(byte_convert(data))
+                bytes.append(pack_int_to_byte(data, bitwidth))
 
             if len(line)%data_per_byte != 0:
                 data = []
                 i = len(line)//data_per_byte
                 for pos in range(len(line)%data_per_byte):
                     data.append(line[(i*data_per_byte)+pos])
-                    bytes.append(byte_convert(data))
+                    # bytes.append(byte_convert(data))
+                    bytes.append(pack_int_to_byte(data, bitwidth))
 
             var_def_str += "    " + ", ".join(
                 [f"0x{b:02X}" for val in bytes for b in val]
