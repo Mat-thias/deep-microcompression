@@ -18,10 +18,7 @@ class Layer(ABC):
     @abstractmethod
     def init_prune_channel(self):
         pass
-
-    def is_prunable(self):
-        return bool(self.get_prune_channel_possible_hypermeters())
-
+    
     @abstractmethod
     def get_prune_channel_possible_hypermeters(self):
         pass

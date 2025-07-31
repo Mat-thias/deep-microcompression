@@ -25,8 +25,6 @@ from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
 
-    int8_to_bytes,
-
     QuantizationScheme,
     QuantizationGranularity,
 )
@@ -461,7 +459,7 @@ class Sequential(nn.Sequential):
 
         return get_all_combinations(flatten_dict({
             "prune_channel" : {
-                # "sparsity" : self.get_prune_channel_possible_hypermeters(),
+                "sparsity" : self.get_prune_channel_possible_hypermeters(),
                 "metric" : ["l2", "l1"],
             },
             "quantize" : self.get_quantize_possible_hyperparameters()
@@ -619,6 +617,9 @@ class Sequential(nn.Sequential):
             definition_file += layer_def 
 
             _, input_shape = layer.get_output_tensor_shape(input_shape)
+
+            # if isinstance(layer, nn.Linear):
+            #     print("in sequetial linear", layer_param_def[150:])  
         
         layers_def += "};\n"
         definition_file += layers_def
@@ -657,7 +658,7 @@ class Sequential(nn.Sequential):
 
         import random
         index = random.randint(0, self.test_input.size(0)-1)
-
+        # index = 0
         test_input_def = f"\nconst float test_input[] = {{\n"
         for line in torch.split(self.test_input[index].flatten(), 8):
             test_input_def += "    " + ", ".join(

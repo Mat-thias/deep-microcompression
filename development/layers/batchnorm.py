@@ -14,7 +14,6 @@ from ..utils import (
 
 class BatchNorm2d(Layer, nn.BatchNorm2d):
 
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -99,7 +98,6 @@ class BatchNorm2d(Layer, nn.BatchNorm2d):
 
         param_header, param_def = convert_tensor_to_bytes_var(folded_bias, f"{var_name}_folded_bias")
         layer_header += param_header
-        layer_param_def += param_def
         layer_param_def += param_def
 
         layer_def = (
