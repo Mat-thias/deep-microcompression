@@ -19,10 +19,40 @@
 #define DLAI_EVEN 0  ///< Identifier for even-numbered layers
 #define DLAI_ODD  1  ///< Identifier for odd-numbered layers
 
-#if !defined(STATIC_QUANTIZATION_PER_TENSOR)
-// ==============================================
-// Floating-Point Version
-// ==============================================
+
+#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
+
+class Sequential {
+private:
+    Layer** layers;                  ///< Array of layer pointers
+    uint32_t layers_len;             ///< Number of layers in the model
+    
+    int8_t* workspace_even_layer;    ///< Workspace buffer for even layers
+    int8_t* workspace_odd_layer;     ///< Workspace buffer for odd layers
+
+public:
+    int8_t* input;                  ///< Pointer to quantized input buffer
+    int8_t* output;                 ///< Pointer to final quantized output
+
+    /**
+     * @brief Constructs a quantized sequential model
+     * @param layers Array of layer pointers
+     * @param layers_len Number of layers
+     * @param workspace Pre-allocated workspace memory
+     * @param workspace_even_layer_size Size of even layer partition
+     */
+    Sequential(Layer** layers, uint32_t layers_len,
+              int8_t* workspace, uint32_t workspace_even_layer_size);
+
+    /**
+     * @brief Executes forward pass through all quantized layers
+     * 
+     * Uses same alternating buffer strategy as floating-point version
+     */
+    void predict(void);
+};
+
+#else // DYNAMIC_QUANTIZATION_PER_TENSOR
 
 /**
  * @brief Sequential container for floating-point neural network layers
@@ -60,47 +90,57 @@ public:
     void predict(void);
 };
 
-#else
-// ==============================================
-// Quantized Version (Static Per-Tensor)
-// ==============================================
 
-/**
- * @brief Sequential container for quantized (int8_t) neural network layers
- * 
- * Provides same functionality as floating-point version but operates on
- * quantized data with int8_t precision.
- */
-class Sequential {
-private:
-    Layer** layers;                  ///< Array of layer pointers
-    uint32_t layers_len;             ///< Number of layers in the model
+#endif // QUANTIZATION_TYPE
+
+
+// #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
+// // ==============================================
+// // Floating-Point Version
+// // ==============================================
+
+
+// #else
+// // ==============================================
+// // Quantized Version (Static Per-Tensor)
+// // ==============================================
+
+// /**
+//  * @brief Sequential container for quantized (int8_t) neural network layers
+//  * 
+//  * Provides same functionality as floating-point version but operates on
+//  * quantized data with int8_t precision.
+//  */
+// class Sequential {
+// private:
+//     Layer** layers;                  ///< Array of layer pointers
+//     uint32_t layers_len;             ///< Number of layers in the model
     
-    int8_t* workspace_even_layer;    ///< Workspace buffer for even layers
-    int8_t* workspace_odd_layer;     ///< Workspace buffer for odd layers
+//     int8_t* workspace_even_layer;    ///< Workspace buffer for even layers
+//     int8_t* workspace_odd_layer;     ///< Workspace buffer for odd layers
 
-public:
-    int8_t* input;                  ///< Pointer to quantized input buffer
-    int8_t* output;                 ///< Pointer to final quantized output
+// public:
+//     int8_t* input;                  ///< Pointer to quantized input buffer
+//     int8_t* output;                 ///< Pointer to final quantized output
 
-    /**
-     * @brief Constructs a quantized sequential model
-     * @param layers Array of layer pointers
-     * @param layers_len Number of layers
-     * @param workspace Pre-allocated workspace memory
-     * @param workspace_even_layer_size Size of even layer partition
-     */
-    Sequential(Layer** layers, uint32_t layers_len,
-              int8_t* workspace, uint32_t workspace_even_layer_size);
+//     /**
+//      * @brief Constructs a quantized sequential model
+//      * @param layers Array of layer pointers
+//      * @param layers_len Number of layers
+//      * @param workspace Pre-allocated workspace memory
+//      * @param workspace_even_layer_size Size of even layer partition
+//      */
+//     Sequential(Layer** layers, uint32_t layers_len,
+//               int8_t* workspace, uint32_t workspace_even_layer_size);
 
-    /**
-     * @brief Executes forward pass through all quantized layers
-     * 
-     * Uses same alternating buffer strategy as floating-point version
-     */
-    void predict(void);
-};
+//     /**
+//      * @brief Executes forward pass through all quantized layers
+//      * 
+//      * Uses same alternating buffer strategy as floating-point version
+//      */
+//     void predict(void);
+// };
 
-#endif // STATIC_QUANTIZATION_PER_TENSOR
+// #endif // STATIC_QUANTIZATION_PER_TENSOR
 
 #endif // SEQUENTIAL_H
