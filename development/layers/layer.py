@@ -92,6 +92,7 @@ class Quantize:
         scheme: QuantizationScheme, 
         granularity: QuantizationGranularity, 
         scale_type: QuantizationScaleType, 
+        avg_exp: float = 0.1,
         base: Optional[Iterable["Quantize"]] = None, 
         base_accumulator: Optional[Callable[[torch.Tensor, int, Iterable["Quantize"]], torch.Tensor]] = None,
         prune_channel: Optional["Prune_Channel"] = None
@@ -100,8 +101,9 @@ class Quantize:
         self.module = module
         self.bitwidth = bitwidth
         self.scheme = scheme
-        self.scale_type = scale_type
         self.granularity = granularity
+        self.scale_type = scale_type
+        self.avg_exp = avg_exp
         self.rmin = None
         self.rmax = None 
 
@@ -130,7 +132,6 @@ class Quantize:
                 scale = self.base_accumulator(self.base)    
             else:
                 scale = self.base_accumulator(self.base)[0]
-        scale[scale == 0.] = 1.
         return scale
     
     @property
@@ -147,13 +148,33 @@ class Quantize:
             self.update_parameters(x)
         return self.fake_apply(x)
  
- 
+    @torch.no_grad()
     def update_parameters(self, x: torch.Tensor) -> None:
         if self.scale_type == QuantizationScaleType.SYMMETRIC:
-            self.rmax = x.max() if self.granularity == QuantizationGranularity.PER_TENSOR else x.abs().view(x.size(0), -1).max(dim=1)[0]
+            if self.granularity == QuantizationGranularity.PER_TENSOR:
+                if self.rmax is None: self.rmax = x.abs().max()
+                else: self.rmax = self.rmax * (1 -self.avg_exp) + self.avg_exp * x.abs().max() 
+            else:
+                if self.rmax is None: self.rmax = x.abs().view(x.size(0), -1).max(dim=1)[0]
+                else: self.rmax = self.rmax * (1 -self.avg_exp) + self.avg_exp * x.abs().view(x.size(0), -1).max(dim=1)[0]
+            # self.rmax = x.max() if self.granularity == QuantizationGranularity.PER_TENSOR else x.abs().view(x.size(0), -1).max(dim=1)[0]
         else:
-            self.rmax = x.max() if self.granularity == QuantizationGranularity.PER_TENSOR else x.view(x.size(0), -1).max(dim=1)[0]
-            self.rmin = x.min() if self.granularity == QuantizationGranularity.PER_TENSOR else x.view(x.size(0), -1).min(dim=1)[0]
+            if self.granularity == QuantizationGranularity.PER_TENSOR:
+                if self.rmax is None or self.rmin is None: 
+                    self.rmax = x.max()
+                    self.rmin = x.min()
+                else:
+                    self.rmax = self.rmax * (1 -self.avg_exp) + self.avg_exp * x.max()
+                    self.rmin = self.rmin * (1 -self.avg_exp) + self.avg_exp * x.min()
+            else:
+                if self.rmax is None or self.rmin is None: 
+                    self.rmax = x.view(x.size(0), -1).max(dim=1)[0]
+                    self.rmin = x.view(x.size(0), -1).min(dim=1)[0]
+                else:
+                    self.rmax = self.rmax * (1 -self.avg_exp) + self.avg_exp * x.view(x.size(0), -1).max(dim=1)[0]
+                    self.rmin = self.rmin * (1 -self.avg_exp) + self.avg_exp * x.view(x.size(0), -1).min(dim=1)[0]
+            # self.rmax = x.max() if self.granularity == QuantizationGranularity.PER_TENSOR else x.view(x.size(0), -1).max(dim=1)[0]
+            # self.rmin = x.min() if self.granularity == QuantizationGranularity.PER_TENSOR else x.view(x.size(0), -1).min(dim=1)[0]
         # print(self.scale, self.module, self.granularity, self.scale_type, "herrrrkkkkkk")
         # print(self.rmax, self.module, self.granularity, self.scale_type, "herrrrkkkkkk")
 
