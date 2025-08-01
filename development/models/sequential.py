@@ -55,7 +55,7 @@ class Sequential(nn.Sequential):
             
             # Auto-name layers with type_index convention (e.g. conv2d_0)
             for layer in args:
-                if isinstance(layer, Layer) and isinstance(layer, nn.Module): 
+                if isinstance(layer, Layer) or isinstance(layer, nn.Module): 
                     class_idx[layer.__class__.__name__] = class_idx.get(layer.__class__.__name__, -1) + 1
                     idx = class_idx[layer.__class__.__name__]
                     layer_type = layer.__class__.__name__.lower()
@@ -121,14 +121,11 @@ class Sequential(nn.Sequential):
         history = dict()
         metrics_val = dict()
 
+
         for epoch in tqdm(range(epochs)):
             # Training phase
             train_loss = 0
             train_data_len = 0
-
-            if metrics is not None:
-                for name in metrics:
-                    metrics_val[f"train_{name}"] = 0
 
             self.train()
             for X, y_true in train_dataloader:
@@ -144,18 +141,14 @@ class Sequential(nn.Sequential):
                 train_loss += loss.item()
                 train_data_len += X.size(0)
 
-                if metrics is not None:
-                    for name, func in metrics.items():
-                        metrics_val[f"train_{name}"] += func(y_pred, y_true)
+            train_loss /= train_data_len
+            if metrics is not None:
+                for name, func in metrics.items():
+                    metrics_val[f"train_{name}"] = self.evaluate(train_dataloader, metric_fun=func, device=device)
 
 # #################################################
 #                 break
 # #################################################
-
-            train_loss /= train_data_len
-            if metrics is not None:
-                for name in metrics:
-                    metrics_val[f"train_{name}"] /= train_data_len
 
             # Validation phase
             if validation_dataloader is not None:
@@ -163,10 +156,6 @@ class Sequential(nn.Sequential):
                 with torch.inference_mode():
                     validation_loss = 0
                     validation_data_len = 0
-                    
-                    if metrics is not None:
-                        for name in metrics:
-                            metrics_val[f"validation_{name}"] = 0
                             
                     for X, y_true in validation_dataloader:
                         X = X.to(device)
@@ -175,18 +164,14 @@ class Sequential(nn.Sequential):
                         validation_loss += criterion_fun(y_pred, y_true).item()
                         validation_data_len += X.size(0)
                         
-                        if metrics is not None:
-                            for name, func in metrics.items():
-                                metrics_val[f"validation_{name}"] += func(y_pred, y_true)
-
-# #################################################
-#                         break
-# #################################################
-
                     validation_loss /= validation_data_len
                     if metrics is not None:
-                        for name in metrics:
-                            metrics_val[f"validation_{name}"] /= validation_data_len
+                        for name, func in metrics.items():
+                            metrics_val[f"validation_{name}"] = self.evaluate(validation_dataloader, metric_fun=func, device=device)
+
+#################################################
+                        # break
+#################################################
 
                 # Learning rate scheduling
                 if lr_scheduler is not None: 
@@ -254,10 +239,10 @@ class Sequential(nn.Sequential):
         data_len = 0
 
 
-################################################################################################
+###############################################################################################
         # Saving the a test input data
         setattr(self, "test_input", next(iter(data_loader))[0])
-################################################################################################
+###############################################################################################
 
 
         self.eval()
@@ -268,9 +253,9 @@ class Sequential(nn.Sequential):
             metric_val += metric_fun(y_pred, y_true)
             data_len += X.size(0)
 
-#################################################
+################################################
             # break
-#################################################
+################################################
 
         return metric_val / data_len
         
@@ -508,6 +493,10 @@ class Sequential(nn.Sequential):
         for layer in self.layers.values():
             size += layer.get_size_in_bits()
         return size
+    
+
+    def get_size_in_bytes(self):
+        return self.get_size_in_bits()//8
 
 
 
@@ -658,6 +647,7 @@ class Sequential(nn.Sequential):
 
         import random
         index = random.randint(0, self.test_input.size(0)-1)
+        
         # index = 0
         test_input_def = f"\nconst float test_input[] = {{\n"
         for line in torch.split(self.test_input[index].flatten(), 8):

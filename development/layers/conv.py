@@ -43,14 +43,14 @@ class Conv2d(Layer, nn.Conv2d):
     def __init__(self, *args, **kwargs):
         """Initialize Conv2d layer with standard PyTorch parameters"""
         self.pad = kwargs.pop("pad", (0, 0, 0, 0))
-        assert len(self.pad) == 4, "Invalid pad, pad = (pad_left, pad_right, pad_top, pad_bottom)"
+        assert len(self.pad) == 4, f"pad {self.pad} is invalid, pad should be of (pad_left, pad_right, pad_top, pad_bottom)"
         
-        groups = kwargs.pop("groups", 1)
-        assert groups == 1 or groups == self.out_channels, "Only supports group = 1 or group = out_channels (Depthwise conv)"
+        groups = kwargs.get("groups", 1)
 
         if "padding" in kwargs:
             assert kwargs["padding"] == 0, "Use pad instead of padding to pad input"
         super().__init__(*args, **kwargs)
+        assert groups == 1 or groups == self.out_channels, "Only supports group = 1 or group = out_channels (Depthwise conv)"
 
 
     def forward(self, input:torch.Tensor) -> torch.Tensor:
