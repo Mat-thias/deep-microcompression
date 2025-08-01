@@ -15,7 +15,8 @@ from functools import partial
 import torch
 from torch import nn
 
-from .layer import Layer, Prune_Channel, Quantize
+from .layer import Layer
+from ..compressors import Prune_Channel, Quantize
 
 from ..utils import (
     convert_tensor_to_bytes_var,
@@ -42,14 +43,14 @@ class Conv2d(Layer, nn.Conv2d):
     def __init__(self, *args, **kwargs):
         """Initialize Conv2d layer with standard PyTorch parameters"""
         self.pad = kwargs.pop("pad", (0, 0, 0, 0))
-        assert len(self.pad) == 4, "Invalid pad, pad = (pad_left, pad_right, pad_top, pad_bottom)"
+        assert len(self.pad) == 4, f"pad {self.pad} is invalid, pad should be of (pad_left, pad_right, pad_top, pad_bottom)"
         
-        groups = kwargs.pop("groups", 1)
-        assert groups == 1 or groups == self.out_channels, "Only supports group = 1 or group = out_channels (Depthwise conv)"
+        groups = kwargs.get("groups", 1)
 
         if "padding" in kwargs:
             assert kwargs["padding"] == 0, "Use pad instead of padding to pad input"
         super().__init__(*args, **kwargs)
+        assert groups == 1 or groups == self.out_channels, "Only supports group = 1 or group = out_channels (Depthwise conv)"
 
 
     def forward(self, input:torch.Tensor) -> torch.Tensor:
@@ -77,7 +78,7 @@ class Conv2d(Layer, nn.Conv2d):
                 if hasattr(self, "input_quantize"):
                     input = self.input_quantize(input)
                 weight = self.weight_quantize(weight)
-                if self.bias is not None:
+                if self.bias is not None and hasattr(self, "bias_quantize"):
                     bias = self.bias_quantize(bias)
 
         input =  nn.functional.pad(input, self.pad, "constant", 0) 
@@ -116,7 +117,6 @@ class Conv2d(Layer, nn.Conv2d):
             Indices of kept channels
         """
         assert(self.groups == 1 or self.groups == self.out_channels), "Channel Pruning is yet to be implement for grouped convolution, on Deepwise convolution."
-        super().init_prune_channel()
 
         if isinstance(sparsity, float):
             sparsity = min(max(0., sparsity), 1.)
@@ -149,7 +149,7 @@ class Conv2d(Layer, nn.Conv2d):
                 importance = self.weight.pow(2) if metric == "l2" else self.weight.abs()
                 channel_importance = importance.sum(dim=[1, 2, 3])
                 keep_current_channel_index = torch.sort(torch.topk(channel_importance, density, dim=0).indices).values
-
+    
         setattr(self, "weight_prune_channel", Prune_Channel(
             module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
         ))
@@ -188,20 +188,20 @@ class Conv2d(Layer, nn.Conv2d):
 
         if self.bias is not None:
             if not self.is_pruned_channel:
-                if scheme == QuantizationScheme.DYNAMIC:
-                    setattr(self, "bias_quantize", Quantize(
-                        self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
-                    ))
-                elif scheme == QuantizationScheme.STATIC:
+                # if scheme == QuantizationScheme.DYNAMIC:
+                #     setattr(self, "bias_quantize", Quantize(
+                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
+                #     ))
+                if scheme == QuantizationScheme.STATIC:
                     setattr(self, "bias_quantize", Quantize(
                         self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize]
                     ))
             else:
-                if scheme == QuantizationScheme.DYNAMIC:
-                    setattr(self, "bias_quantize", Quantize(
-                        self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize], prune_channel=self.bias_prune_channel
-                    ))
-                elif scheme == QuantizationScheme.STATIC:
+                # if scheme == QuantizationScheme.DYNAMIC:
+                #     setattr(self, "bias_quantize", Quantize(
+                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize], prune_channel=self.bias_prune_channel
+                #     ))
+                if scheme == QuantizationScheme.STATIC:
                     setattr(self, "bias_quantize", Quantize(
                         self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize], prune_channel=self.bias_prune_channel
                     ))
@@ -209,8 +209,8 @@ class Conv2d(Layer, nn.Conv2d):
         # calibration
         if scheme == QuantizationScheme.DYNAMIC:
             self.weight_quantize.update_parameters(self.weight) 
-            if self.bias is not None:
-                self.bias_quantize.update_parameters(self.bias)
+            # if self.bias is not None:
+            #     self.bias_quantize.update_parameters(self.bias)
  
 
     @torch.no_grad()
@@ -226,7 +226,7 @@ class Conv2d(Layer, nn.Conv2d):
         if self.is_quantized:
             is_packed = True
             weight_bitwidth = self.weight_quantize.bitwidth
-            if self.bias is not None:
+            if self.bias is not None and hasattr(self, "bias_quantize"):
                 bias_bitwidth = self.bias_quantize.bitwidth
             # extra parameters
             if self.weight_quantize.scheme == QuantizationScheme.DYNAMIC:
@@ -264,7 +264,7 @@ class Conv2d(Layer, nn.Conv2d):
 
             if self.is_quantized:
                     weight = self.weight_quantize.apply(weight)
-                    if self.bias is not None:
+                    if self.bias is not None and hasattr(self, "bias_quantize"):
                         bias = self.bias_quantize.apply(bias)
 
         return weight, bias
@@ -331,7 +331,7 @@ class Conv2d(Layer, nn.Conv2d):
 
         if self.bias is not None:
             bias_bitwidth = None
-            if self.is_quantized:
+            if self.is_quantized and hasattr(self, "bias_quantize"):
                 bias_bitwidth = self.bias_quantize.bitwidth
             param_header, param_def = convert_tensor_to_bytes_var(
                 bias, 

@@ -21,7 +21,8 @@ from ..utils import (
 
     convert_tensor_to_bytes_var
 )
-from .layer import Layer, Quantize
+from .layer import Layer
+from ..compressors import Quantize
 
 
 class ReLU(Layer, nn.ReLU):

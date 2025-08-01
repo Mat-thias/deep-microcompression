@@ -13,6 +13,9 @@
 #include <math.h>    // For math operations
 
 
+// #define DYNAMIC_QUANTIZATION_PER_TENSOR
+// #define STATIC_QUANTIZATION_PER_TENSOR
+
 struct Padding_t {
     uint8_t padding_left;
     uint8_t padding_right;
@@ -23,10 +26,27 @@ struct Padding_t {
         return (this->padding_bottom + this->padding_top + 
                 this->padding_left + this->padding_right) > 0;
     }
+
 };
 
 
-#if !defined(STATIC_QUANTIZATION_PER_TENSOR)
+
+
+#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
+class Layer {
+public:
+    /**
+     * @brief Forward pass interface for floating-point layers
+     * @param input Pointer to input tensor (float)
+     * @param output Pointer to output tensor (float)
+     * 
+     * @note Pure virtual function - must be implemented by derived classes
+     */
+    virtual void forward(int8_t* input, int8_t* output) = 0;
+};
+
+
+#else // DYNAMIC_QUANTIZATION_PER_TENSOR
 
 /**
  * @class Layer
@@ -47,27 +67,33 @@ public:
     virtual void forward(float* input, float* output) = 0;
 };
 
-#else // STATIC_QUANTIZATION_PER_TENSOR
 
-/**
- * @class Layer
- * @brief Abstract base class for all quantized layers
- * 
- * Provides the interface for forward propagation in quantized networks.
- * All concrete layer types must implement the forward() method.
- */
-class Layer {
-public:
-    /**
-     * @brief Forward pass interface for quantized layers
-     * @param input Pointer to quantized input tensor (int8_t)
-     * @param output Pointer to quantized output tensor (int8_t)
-     * 
-     * @note Pure virtual function - must be implemented by derived classes
-     */
-    virtual void forward(int8_t* input, int8_t* output) = 0;
-};
+#endif // QUANTIZATION_TYPE
 
-#endif // STATIC_QUANTIZATION_PER_TENSOR
+
+// #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
+
+// #else // STATIC_QUANTIZATION_PER_TENSOR
+
+// /**
+//  * @class Layer
+//  * @brief Abstract base class for all quantized layers
+//  * 
+//  * Provides the interface for forward propagation in quantized networks.
+//  * All concrete layer types must implement the forward() method.
+//  */
+// class Layer {
+// public:
+//     /**
+//      * @brief Forward pass interface for quantized layers
+//      * @param input Pointer to quantized input tensor (int8_t)
+//      * @param output Pointer to quantized output tensor (int8_t)
+//      * 
+//      * @note Pure virtual function - must be implemented by derived classes
+//      */
+//     virtual void forward(int8_t* input, int8_t* output) = 0;
+// };
+
+// #endif // STATIC_QUANTIZATION_PER_TENSOR
 
 #endif // LAYER_H

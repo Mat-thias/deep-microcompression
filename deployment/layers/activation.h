@@ -19,7 +19,55 @@
 
 #include "layer.h"
 
-#if !defined(STATIC_QUANTIZATION_PER_TENSOR)
+
+#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
+
+class ReLU : public Layer {
+private:
+    uint32_t input_size;      ///< Number of elements in input tensor
+    int8_t input_zero_point;  ///< Zero-point for quantized input
+    
+public:
+    /**
+     * @brief Constructor for quantized ReLU
+     * @param input_size Number of elements in input tensor
+     * @param input_zero_point Zero-point for quantized input
+     */
+    ReLU(uint32_t input_size, int8_t input_zero_point);
+
+    /**
+     * @brief Forward pass for quantized ReLU
+     * @param input Pointer to input tensor (int8_t)
+     * @param output Pointer to output tensor (int8_t)
+     */
+    void forward(int8_t* input, int8_t* output);
+};
+
+
+class ReLU6 : public Layer {
+private:
+    uint32_t input_size;      ///< Number of elements in input tensor
+    int8_t input_zero_point;  ///< Zero-point for quantized input
+    int8_t input_six_point;
+    
+public:
+    /**
+     * @brief Constructor for quantized ReLU6
+     * @param input_size Number of elements in input tensor
+     * @param input_zero_point Zero-point for quantized input
+     */
+    ReLU6(uint32_t input_size, int8_t input_zero_point, int8_t input_six_point);
+
+    /**
+     * @brief Forward pass for quantized ReLU
+     * @param input Pointer to input tensor (int8_t)
+     * @param output Pointer to output tensor (int8_t)
+     */
+    void forward(int8_t* input, int8_t* output);
+};
+
+
+#else // DYNAMIC_QUANTIZATION_PER_TENSOR
 
 /**
  * @brief Floating-point ReLU activation layer
@@ -66,34 +114,13 @@ public:
     void forward(float* input, float* output);
 };
 
-#else // STATIC_QUANTIZATION_PER_TENSOR
 
-/**
- * @brief Quantized ReLU activation layer
- * 
- * Implements quantized ReLU: output = max(zero_point, input)
- */
-class ReLU : public Layer {
-private:
-    uint32_t input_size;      ///< Number of elements in input tensor
-    int8_t input_zero_point;  ///< Zero-point for quantized input
-    
-public:
-    /**
-     * @brief Constructor for quantized ReLU
-     * @param input_size Number of elements in input tensor
-     * @param input_zero_point Zero-point for quantized input
-     */
-    ReLU(uint32_t input_size, int8_t input_zero_point);
+#endif // QUANTIZATION_TYPE
 
-    /**
-     * @brief Forward pass for quantized ReLU
-     * @param input Pointer to input tensor (int8_t)
-     * @param output Pointer to output tensor (int8_t)
-     */
-    void forward(int8_t* input, int8_t* output);
-};
-
-#endif // STATIC_QUANTIZATION_PER_TENSOR
+// /**
+//  * @brief Quantized ReLU activation layer
+//  * 
+//  * Implements quantized ReLU: output = max(zero_point, input)
+//  */
 
 #endif // ACTIVATION_H
