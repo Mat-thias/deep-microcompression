@@ -6,10 +6,11 @@ from torch import nn
 from .layer import Layer
 from ..compressors import Prune_Channel
 
-
 from ..utils import (
     convert_tensor_to_bytes_var,
-    get_size_in_bits
+    get_size_in_bits,
+
+    QuantizationScheme
 )
 
 class BatchNorm2d(Layer, nn.BatchNorm2d):
@@ -52,7 +53,9 @@ class BatchNorm2d(Layer, nn.BatchNorm2d):
 
     @torch.no_grad()
     def init_quantize(self, bitwidth, scheme, granularity):
-        raise
+
+        if scheme == QuantizationScheme.STATIC:
+            raise
 
 
     def get_size_in_bits(self):
