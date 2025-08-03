@@ -50,6 +50,7 @@ class ReLU(Layer, nn.ReLU):
             if self.is_quantized:
                 if hasattr(self, "input_quantize"):
                     input = self.input_quantize(input)
+                    # print(self.input_quantize.zero_point, self)
 
         return super().forward(input)
     
@@ -122,7 +123,7 @@ class ReLU(Layer, nn.ReLU):
 
         if self.is_quantized and hasattr(self, "input_quantize"):
             assert self.input_quantize.scheme == QuantizationScheme.STATIC, f"{self.__class__.__name__} has a input_quantize and is not static quantize"
-            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, *(float*){var_name}_input_zero_point);\n"
+            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, *(int8_t*){var_name}_input_zero_point);\n"
 
             param_header, param_def = convert_tensor_to_bytes_var(
                 self.input_quantize.zero_point, 
@@ -218,7 +219,7 @@ class ReLU6(Layer, nn.ReLU6):
 
         if self.is_quantized and hasattr(self, "input_quantize"):
             assert self.input_quantize.scheme == QuantizationScheme.STATIC, f"{self.__class__.__name__} has a input_quantize and is not static quantize"
-            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, *(float*){var_name}_input_zero_point, *(float*){var_name}_input_six_point);\n"
+            layer_def = f"{self.__class__.__name__} {var_name}({input_size}, *(int8_t*){var_name}_input_zero_point, *(int8_t*){var_name}_input_six_point);\n"
 
             param_header, param_def = convert_tensor_to_bytes_var(
                 self.input_quantize.zero_point, 

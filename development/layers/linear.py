@@ -63,7 +63,7 @@ class Linear(Layer, nn.Linear):
                     bias = self.bias_prune_channel(bias)
 
             if self.is_quantized:
-                if hasattr(self, "input_quantize"):
+                if hasattr(self, "input_quantize"): 
                     input = self.input_quantize(input)
                 weight = self.weight_quantize(weight)
                 if self.bias is not None and hasattr(self, "bias_quantize"):
@@ -75,6 +75,8 @@ class Linear(Layer, nn.Linear):
             if self.is_quantized:
                 if hasattr(self, "output_quantize"):
                     output = self.output_quantize(output)
+
+                    # print(self.input_quantize.zero_point, self)
 
         return output
     
@@ -123,15 +125,26 @@ class Linear(Layer, nn.Linear):
             channel_importance = importance.sum(dim=[1])
             keep_current_channel_index = torch.sort(torch.topk(channel_importance, density, dim=0).indices).values
 
+        # setattr(self, "weight_prune_channel", Prune_Channel(
+        #     module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
+        # ))
+
+        # if self.bias is not None:
+        #     setattr(self, "bias_prune_channel", Prune_Channel(
+        #         module=self, keep_current_channel_index=keep_current_channel_index
+        #     ))
+
+        self.register_buffer("keep_current_channel_index", keep_current_channel_index.to(self.weight.device))
+        self.register_buffer("keep_prev_channel_index", keep_prev_channel_index.to(self.weight.device))
+
         setattr(self, "weight_prune_channel", Prune_Channel(
-            module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
+            module=self, keep_current_channel_index=self.keep_current_channel_index, keep_prev_channel_index=self.keep_prev_channel_index
         ))
 
         if self.bias is not None:
             setattr(self, "bias_prune_channel", Prune_Channel(
-                module=self, keep_current_channel_index=keep_current_channel_index
+                module=self, keep_current_channel_index=self.keep_current_channel_index
             ))
-
         return keep_current_channel_index
 
 
@@ -238,7 +251,7 @@ class Linear(Layer, nn.Linear):
                     weight = self.weight_quantize.apply(weight)
                     if self.bias is not None and hasattr(self, "bias_quantize"):
                         bias = self.bias_quantize.apply(bias)
-                        print("compression in linear", bias.dtype, bias.shape)
+                        # print("compression in linear", bias.dtype, bias.shape)
                     
         return weight, bias
 
@@ -280,6 +293,7 @@ class Linear(Layer, nn.Linear):
             bias_bitwidth = None
             if self.is_quantized and hasattr(self, "bias_quantize"):
                 bias_bitwidth = self.bias_quantize.bitwidth
+                # print(bias.dtype, "in linear bias dtype")
             param_header, param_def = convert_tensor_to_bytes_var(
                 bias, 
                 f"{var_name}_bias",

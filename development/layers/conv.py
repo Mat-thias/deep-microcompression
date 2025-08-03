@@ -93,6 +93,8 @@ class Conv2d(Layer, nn.Conv2d):
                 if hasattr(self, "output_quantize"):
                     output = self.output_quantize(output)
 
+                    # print(self.output_quantize.zero_point, self)
+
         return output
 
 
@@ -130,7 +132,6 @@ class Conv2d(Layer, nn.Conv2d):
 
         if keep_prev_channel_index is None:
             keep_prev_channel_index = torch.arange(self.in_channels)
-
         if self.groups == self.out_channels:
 
             keep_prev_channel_index_temp = keep_prev_channel_index
@@ -149,14 +150,17 @@ class Conv2d(Layer, nn.Conv2d):
                 importance = self.weight.pow(2) if metric == "l2" else self.weight.abs()
                 channel_importance = importance.sum(dim=[1, 2, 3])
                 keep_current_channel_index = torch.sort(torch.topk(channel_importance, density, dim=0).indices).values
-    
+                
+        self.register_buffer("keep_current_channel_index", keep_current_channel_index.to(self.weight.device))
+        self.register_buffer("keep_prev_channel_index", keep_prev_channel_index.to(self.weight.device))
+
         setattr(self, "weight_prune_channel", Prune_Channel(
-            module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
+            module=self, keep_current_channel_index=self.keep_current_channel_index, keep_prev_channel_index=self.keep_prev_channel_index
         ))
 
         if self.bias is not None:
             setattr(self, "bias_prune_channel", Prune_Channel(
-                module=self, keep_current_channel_index=keep_current_channel_index
+                module=self, keep_current_channel_index=self.keep_current_channel_index
             ))
         return keep_current_channel_index
 
@@ -463,6 +467,7 @@ class Conv2d(Layer, nn.Conv2d):
                 self.output_quantize.zero_point, 
                 f"{var_name}_output_zero_point"
             )
+
             layer_header += param_header
             layer_param_def += param_def
 
@@ -472,7 +477,6 @@ class Conv2d(Layer, nn.Conv2d):
             )
             layer_header += param_header
             layer_param_def += param_def
-
 
             if self.bias is not None:
                 bias_scale = self.bias_quantize.scale

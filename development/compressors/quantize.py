@@ -80,9 +80,9 @@ class Quantize:
     def zero_point(self):
         assert self.scale_type == QuantizationScaleType.ASSYMMETRIC, f"scale type should be {QuantizationScaleType.ASSYMMETRIC}"
         if self.base is None:
-            return get_quantize_scale_zero_point_assy(self.rmax, self.rmin, self.bitwidth)[1]
+            return get_quantize_scale_zero_point_assy(self.rmax, self.rmin, self.bitwidth)[1].to(torch.int8)
         else:
-            return self.base_accumulator(self.base)[1]
+            return self.base_accumulator(self.base)[1].to(torch.int8)
 
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:

@@ -90,7 +90,6 @@ void pad_input(int8_t* input, int8_t zero_point, Padding_t padding,
                 }
             }
         }
-
     }
 }
 
