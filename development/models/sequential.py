@@ -11,7 +11,7 @@ import copy
 from os import path
 import itertools
 from typing import (
-    List, Dict, OrderedDict, Iterable, Callable, Optional, Union, Any
+    List, Dict, OrderedDict, Iterable, Callable, Optional, Union
 )
 from tqdm.auto import tqdm
 
@@ -31,8 +31,6 @@ from ..layers.activation import ReLU, ReLU6
 from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
-
-    pack_int_to_byte,
 
     QuantizationScheme,
     QuantizationGranularity,
@@ -152,7 +150,7 @@ class Sequential(nn.Sequential):
         optimizer_fun: torch.optim.Optimizer,
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         validation_dataloader: Optional[data.DataLoader] = None, 
-        metrics: Optional[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]]] = None,
+        metrics: Dict[str, Callable[[torch.Tensor, torch.Tensor], float]] = {},
         verbose: bool = True,
         callbacks: List[Callable] = [],
         device: str = "cpu"
@@ -170,13 +168,13 @@ class Sequential(nn.Sequential):
             Dictionary of training/validation metrics over time
         """
         history = dict()
-        metrics_val = dict()
-
+        metrics_values = dict()
 
         for epoch in tqdm(range(epochs)):
             # Training phase
             train_loss = 0
             train_data_len = 0
+            metrics_result = {name : 0. for name in metrics.keys()}
 
             self.train()
             for X, y_true in train_dataloader:
@@ -192,10 +190,13 @@ class Sequential(nn.Sequential):
                 train_loss += loss.item()
                 train_data_len += X.size(0)
 
+                with torch.inference_mode():
+                    for name, metric_func in metrics.items():
+                        metrics_result[name] += metric_func(y_pred.detach(), y_true)
+
             train_loss /= train_data_len
-            if metrics is not None:
-                for name, func in metrics.items():
-                    metrics_val[f"train_{name}"] = self.evaluate(train_dataloader, metric_fun=func, device=device)
+            for name in metrics.keys():
+                metrics_values[f"train_{name}"] = metrics_result[name] / train_data_len
 
 # #################################################
 #                 break
@@ -204,21 +205,10 @@ class Sequential(nn.Sequential):
             # Validation phase
             if validation_dataloader is not None:
                 self.eval()
-                with torch.inference_mode():
-                    validation_loss = 0
-                    validation_data_len = 0
-                            
-                    for X, y_true in validation_dataloader:
-                        X = X.to(device)
-                        y_true = y_true.to(device)
-                        y_pred = self(X)
-                        validation_loss += criterion_fun(y_pred, y_true).item()
-                        validation_data_len += X.size(0)
-                        
-                    validation_loss /= validation_data_len
-                    if metrics is not None:
-                        for name, func in metrics.items():
-                            metrics_val[f"validation_{name}"] = self.evaluate(validation_dataloader, metric_fun=func, device=device)
+                metrics_result = self.evaluate(validation_dataloader, metrics | {"loss": criterion_fun}, device)
+                validation_loss = metrics_result["loss"]
+                for name in metrics.keys():
+                    metrics_values[f"validation_{name}"] = metrics_result[name]
 
 #################################################
                         # break
@@ -233,7 +223,7 @@ class Sequential(nn.Sequential):
                     print(f"epoch {epoch:4d} | train loss {train_loss:.4f} | validation loss {validation_loss:.4f}", end="")
                     if metrics is not None: 
                         for name in metrics:
-                            print(f" | train {name} {metrics_val[f'train_{name}']:.4f} | validation {name} {metrics_val[f'validation_{name}']:.4f}", end="")
+                            print(f" | train {name} {metrics_values[f'train_{name}']:.4f} | validation {name} {metrics_values[f'validation_{name}']:.4f}", end="")
                     print()
 
                 # Store validation metrics
@@ -241,8 +231,8 @@ class Sequential(nn.Sequential):
                 history["validation_loss"] = history.get("validation_loss", []) + [validation_loss]
                 if metrics is not None: 
                     for name in metrics:
-                        self.fit_history[f"validation_{name}"] = self.fit_history.get(f"validation_{name}", []) + [metrics_val[f"validation_{name}"]]
-                        history[f"validation_{name}"] = history.get(f"validation_{name}", []) + [metrics_val[f"validation_{name}"]]
+                        self.fit_history[f"validation_{name}"] = self.fit_history.get(f"validation_{name}", []) + [metrics_values[f"validation_{name}"]]
+                        history[f"validation_{name}"] = history.get(f"validation_{name}", []) + [metrics_values[f"validation_{name}"]]
 
             # if validation_dataloader is None:
             else:
@@ -250,7 +240,7 @@ class Sequential(nn.Sequential):
                     print(f"epoch {epoch:4d} | train loss {train_loss:.4f}", end="")
                     if metrics is not None:
                         for name in metrics:
-                            print(f" | train {name} {metrics_val[f'train_{name}']:.4f}", end="")
+                            print(f" | train {name} {metrics_values[f'train_{name}']:.4f}", end="")
                     print()
             
             # Store training metrics
@@ -258,8 +248,8 @@ class Sequential(nn.Sequential):
             history["train_loss"] = history.get("train_loss", []) + [train_loss]
             if metrics is not None: 
                 for name in metrics:
-                    self.fit_history[f"train_{name}"] = self.fit_history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
-                    history[f"train_{name}"] = history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
+                    self.fit_history[f"train_{name}"] = self.fit_history.get(f"train_{name}", []) + [metrics_values[f"train_{name}"]]
+                    history[f"train_{name}"] = history.get(f"train_{name}", []) + [metrics_values[f"train_{name}"]]
 
             for callback in callbacks:
                 # if isinstance(callback, EarlyStopper):
@@ -269,14 +259,13 @@ class Sequential(nn.Sequential):
         return history
 
 
-
     @torch.inference_mode()
     def evaluate(
         self, 
         data_loader: data.DataLoader, 
-        metric_fun: Callable, 
+        metrics: Dict[str, Callable[[torch.Tensor, torch.Tensor], float]], 
         device: str = "cpu"
-    ) -> float:
+    ) -> Dict[str, float]:
         """Evaluate model accuracy on given dataset
         
         Args:
@@ -286,23 +275,30 @@ class Sequential(nn.Sequential):
         Returns:
             Accuracy percentageupdate_dynamic_quantize_per_tensor_parameters
         """
-        metric_val = 0
-        data_len = 0
 ###############################################################################################
         # Saving the a test input data
-        setattr(self, "test_input", next(iter(data_loader))[0])
+        if not hasattr(self, "test_input"):
+            setattr(self, "test_input", next(iter(data_loader))[0])
 ###############################################################################################
+        metric_results = dict()
+        data_len = 0
+        for metric_name in metrics.keys():
+            metric_results[metric_name] = 0
+            
         self.eval()
         for X, y_true in tqdm(data_loader):
+            data_len += X.size(0)
             X = X.to(device)
             y_true = y_true.to(device)
             y_pred = self(X)
-            metric_val += metric_fun(y_pred, y_true)
-            data_len += X.size(0)
-################################################
+            for metric_name, metric_func in metrics.items():
+                metric_results[metric_name] += metric_func(y_pred, y_true)
+    ###############################################
             # break
-################################################
-        return metric_val / data_len
+    ###############################################
+        for metric_name in metrics.keys():
+            metric_results[metric_name] /= data_len
+        return metric_results
     
 
     def fuse(self):

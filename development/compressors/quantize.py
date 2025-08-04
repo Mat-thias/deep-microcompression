@@ -37,6 +37,7 @@ class Quantize:
         avg_exp: float = 0.01,
         base: Optional[Iterable["Quantize"]] = None, 
         base_accumulator: Optional[Callable[[torch.Tensor, int, Iterable["Quantize"]], torch.Tensor]] = None,
+        
         prune_channel: Optional["Prune_Channel"] = None
     ) -> None:
 
@@ -47,7 +48,9 @@ class Quantize:
         self.scale_type = scale_type
         self.avg_exp = avg_exp
         self.rmin = None
-        self.rmax = None 
+        self.rmax = None
+        self.rmin_update = True 
+        self.rmax_update = True 
 
         self.base = base
 
