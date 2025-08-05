@@ -1,12 +1,7 @@
 #include "batchnorm.h"
 
 
-#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
-
-
-#else // DYNAMIC_QUANTIZATION_PER_TENSOR
-
-
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 
 BatchNorm2d::BatchNorm2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
                 const float* folded_weight, const float* folded_bias) {
@@ -41,4 +36,7 @@ void BatchNorm2d::forward(float* input, float* output) {
                         
 }
 
-#endif // QUANTIZATION_TYPE
+
+#else // QUANTIZATION_SCHEME
+
+#endif // QUANTIZATION_SCHEME

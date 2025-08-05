@@ -4,10 +4,8 @@
 #include "layer.h"
 
 
-#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 
-
-#else // DYNAMIC_QUANTIZATION_PER_TENSOR
 
 class BatchNorm2d : public Layer{
 
@@ -29,8 +27,8 @@ public:
 };
 
 
-#endif // QUANTIZATION_TYPE
+#else // QUANTIZATION_SCHEME
 
-
+#endif // QUANTIZATION_SCHEME
 
 #endif // BATCHNORM_H

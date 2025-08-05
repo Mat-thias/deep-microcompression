@@ -7,14 +7,14 @@
 
 #include "layer.h"
 
-#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 
-void Layer::forward(int8_t* input, int8_t* output) {
+void Layer::forward(float* input, float* output) {
     // Intentionally empty - to be implemented by derived classes
 }
 
-#else // DYNAMIC_QUANTIZATION_PER_TENSOR
 
+#else // QUANTIZATION_SCHEME
 
 /**
  * @brief Default forward pass implementation for floating-point layers
@@ -24,29 +24,10 @@ void Layer::forward(int8_t* input, int8_t* output) {
  * @note This base implementation does nothing and should be overridden
  *       by derived layer classes.
  */
-void Layer::forward(float* input, float* output) {
+void Layer::forward(int8_t* input, int8_t* output) {
     // Intentionally empty - to be implemented by derived classes
 }
 
 
-#endif // QUANTIZATION_TYPE
 
-// #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
-
-// #else // STATIC_QUANTIZATION_PER_TENSOR
-
-// /**
-//  * @brief Default forward pass implementation for quantized layers
-//  * @param input Pointer to quantized input tensor (int8_t)
-//  * @param output Pointer to quantized output tensor (int8_t)
-//  * 
-//  * @note This base implementation does nothing and should be overridden
-//  *       by derived layer classes in quantized models.
-//  */
-// void Layer::forward(int8_t* input, int8_t* output) {
-//     // Intentionally empty - to be implemented by derived classes
-// }
-
-// #endif // STATIC_QUANTIZATION_PER_TENSOR
-
-
+#endif // QUANTIZATION_SCHEME

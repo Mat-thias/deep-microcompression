@@ -11,36 +11,7 @@
 
 #include "sequential.h"
 
-
-#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
-Sequential::Sequential(Layer **layers, uint32_t layers_len, int8_t *workspace, 
-                      uint32_t workspace_even_layer_size) {
-    this->layers = layers;
-    this->layers_len = layers_len;
-    this->workspace_even_layer = workspace;
-    this->workspace_odd_layer = workspace + workspace_even_layer_size;
-
-    // Set model input/output buffers based on double-buffering strategy
-    this->input = this->workspace_even_layer;
-    this->output = (layers_len % 2 == DLAI_EVEN) ? this->workspace_even_layer 
-                                               : this->workspace_odd_layer;   
-}
-
-void Sequential::predict(void) {
-    for (int i = 0; i < this->layers_len; i++) {
-        switch (i % 2) {
-            case DLAI_EVEN:
-                this->layers[i]->forward(this->workspace_even_layer, 
-                                       this->workspace_odd_layer);
-                break;
-            default:
-                this->layers[i]->forward(this->workspace_odd_layer, 
-                                       this->workspace_even_layer);
-                break;
-        }
-    }
-}
-#else // DYNAMIC_QUANTIZATION_PER_TENSOR
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 
 /**
  * @brief Constructs a floating-point sequential model
@@ -88,62 +59,34 @@ void Sequential::predict(void) {
 }
 
 
+#else // QUATIZATION_SCHEME
 
-#endif // QUANTIZATION_TYPE
+Sequential::Sequential(Layer **layers, uint32_t layers_len, int8_t *workspace, 
+                      uint32_t workspace_even_layer_size) {
+    this->layers = layers;
+    this->layers_len = layers_len;
+    this->workspace_even_layer = workspace;
+    this->workspace_odd_layer = workspace + workspace_even_layer_size;
 
+    // Set model input/output buffers based on double-buffering strategy
+    this->input = this->workspace_even_layer;
+    this->output = (layers_len % 2 == DLAI_EVEN) ? this->workspace_even_layer 
+                                               : this->workspace_odd_layer;   
+}
 
-// #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
-// // ==============================================
-// // Floating-Point Implementation
-// // ==============================================
+void Sequential::predict(void) {
+    for (int i = 0; i < this->layers_len; i++) {
+        switch (i % 2) {
+            case DLAI_EVEN:
+                this->layers[i]->forward(this->workspace_even_layer, 
+                                       this->workspace_odd_layer);
+                break;
+            default:
+                this->layers[i]->forward(this->workspace_odd_layer, 
+                                       this->workspace_even_layer);
+                break;
+        }
+    }
+}
 
-// #else
-// // ==============================================
-// // Quantized Implementation (Static Per-Tensor)
-// // ==============================================
-
-// /**
-//  * @brief Constructs a quantized sequential model
-//  * @param layers Array of layer pointers
-//  * @param layers_len Number of layers in model
-//  * @param workspace Pre-allocated workspace buffer (int8_t)
-//  * @param workspace_even_layer_size Size of even layer workspace partition
-//  * 
-//  * @note Uses same double-buffering strategy as floating-point version
-//  *       but with quantized (int8_t) data type
-//  */
-// Sequential::Sequential(Layer **layers, uint32_t layers_len, int8_t *workspace,
-//                       uint32_t workspace_even_layer_size) {
-//     this->layers = layers;
-//     this->layers_len = layers_len;
-//     this->workspace_even_layer = workspace;
-//     this->workspace_odd_layer = workspace + workspace_even_layer_size;
-
-//     // Set model input/output buffers based on double-buffering strategy
-//     this->input = this->workspace_even_layer;
-//     this->output = (layers_len % 2 == DLAI_EVEN) ? this->workspace_even_layer 
-//                                                : this->workspace_odd_layer;   
-// }
-
-// /**
-//  * @brief Executes forward pass through all quantized layers
-//  * 
-//  * Uses same alternating buffer strategy as floating-point version,
-//  * but operates on quantized (int8_t) data
-//  */
-// void Sequential::predict(void) {
-//     for (int i = 0; i < this->layers_len; i++) {
-//         switch (i % 2) {
-//             case DLAI_EVEN:
-//                 this->layers[i]->forward(this->workspace_even_layer, 
-//                                        this->workspace_odd_layer);
-//                 break;
-//             default:
-//                 this->layers[i]->forward(this->workspace_odd_layer, 
-//                                        this->workspace_even_layer);
-//                 break;
-//         }
-//     }
-// }
-
-// #endif // STATIC_QUANTIZATION_PER_TENSOR
+#endif // QUANTIZATION_SCHEME

@@ -8,6 +8,7 @@
 #include "layers/batchnorm.h"
 #include "layers/conv.h"
 #include "layers/flatten.h"
+#include "layers/fused_layers.h"
 #include "layers/linear.h"
 #include "layers/pooling.h"
 
