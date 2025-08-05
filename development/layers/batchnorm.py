@@ -55,7 +55,8 @@ class BatchNorm2d(Layer, nn.BatchNorm2d):
     def init_quantize(self, bitwidth, scheme, granularity):
 
         if scheme == QuantizationScheme.STATIC:
-            raise
+            raise RuntimeError("Can not perform static quantization with BatchNorm2d, fuse the model first!")
+            
 
 
     def get_size_in_bits(self):

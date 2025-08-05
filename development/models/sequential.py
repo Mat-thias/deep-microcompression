@@ -27,12 +27,13 @@ from ..layers.linear import Linear
 from ..layers.batchnorm import BatchNorm2d
 from ..layers.activation import ReLU, ReLU6
 
-
+from ..compressors import Quantize
 from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
 
     QuantizationScheme,
+    QuantizationScaleType,
     QuantizationGranularity,
 )
 
@@ -84,12 +85,10 @@ class Sequential(nn.Sequential):
         for name, layer in self._modules.items():
             yield name, layer
 
-    
     def names(self):
         for name in self._modules.keys():
             yield name
 
-    
     def layers(self):
         for layer in self._modules.values():
             yield layer
@@ -114,11 +113,11 @@ class Sequential(nn.Sequential):
     def is_compressed(self):
         return self.is_pruned_channel or self.is_quantized
 
-    @property
-    def input_quantize(self):
-        if self.is_quantized and self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"] == QuantizationScheme.STATIC:
-            return self[0].input_quantize
-        return None
+    # @property
+    # def input_quantize(self):
+    #     if self.is_quantized and self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"] == QuantizationScheme.STATIC:
+    #         return self[0].input_quantize
+    #     return None
 
 
     @property
@@ -137,6 +136,9 @@ class Sequential(nn.Sequential):
         Returns:
             Output tensor after passing through all layers
         """
+        if self.is_quantized:
+            if hasattr(self, "input_quantize"):
+                input = self.input_quantize(input)
         for i, layer in enumerate(self):
             # print(f"Layer {i} ({layer.__class__.__name__}): input shape = {input.shape} kernel_size {getattr(layer, "kernel_size", "nan")} stride {getattr(layer, "stride", "nan")} padding {getattr(layer, "padding", "nan")}")
             input = layer(input)
@@ -302,49 +304,104 @@ class Sequential(nn.Sequential):
     
 
     def fuse(self):
-        names = list(self.names())
+        # names = list(self.names())
+        names_layers = list(self.names_layers())
         length = len(self)
-        i = 0
+
         fused_model = Sequential()
+        i = 0
         while i < length:
-            if isinstance(self[names[i]], Conv2d):
-                
-                if i+2 <  length and isinstance(self[names[i+1]], (BatchNorm2d)) and isinstance(self[names[i+2]], ReLU):
-                    fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(self[names[i]], self[names[i+1]])
-                    fused_conv2d_batchnorm2d_relu_layer = fuse_conv2d_relu(fused_conv2d_batchnorm2d_layer, self[names[i+2]])
-                    fused_model.add_module(names[i], fused_conv2d_batchnorm2d_relu_layer)
-                    i += 3
-                elif i+1 <  length and isinstance(self[names[i+1]], (BatchNorm2d)):
-                    fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(self[names[i]], self[names[i+1]])
-                    fused_model.add_module(names[i], fused_conv2d_batchnorm2d_layer)
-                    i += 2
-                elif i+1 <  length and isinstance(self[names[i+1]], ReLU):
-                    fused_conv2d_relu_layer = fuse_conv2d_relu(self[names[i]], self[names[i+1]])
-                    fused_model.add_module(names[i], fused_conv2d_relu_layer)
-                    i += 2
-                else: 
-                    fused_model.add_module(*list(self.names_layers())[i])
-                    i += 1
-            elif isinstance(self[names[i]], Linear):
-                if i+2 <  length and isinstance(self[names[i+1]], (BatchNorm2d)) and isinstance(self[names[i+2]], ReLU):
-                    fused_linear_batchnorm2d_layer = fuse_linear_batchnorm2d(self[names[i]], self[names[i+1]])
-                    fused_linear_batchnorm2d_relu_layer = fuse_linear_relu(fused_linear_batchnorm2d_layer, self[names[i+2]])
-                    fused_model.add_module(names[i], fused_linear_batchnorm2d_relu_layer)
-                    i += 3
-                elif i+1 <  length and isinstance(self[names[i+1]], (BatchNorm2d)):
-                    fused_linear_batchnorm2d_layer = fuse_linear_batchnorm2d(self[names[i]], self[names[i+1]])
-                    fused_model.add_module(names[i], fused_linear_batchnorm2d_layer)
-                    i += 2
-                elif i+1 <  length and isinstance(self[names[i+1]], ReLU):
-                    fused_linear_relu_layer = fuse_linear_relu(self[names[i]], self[names[i+1]])
-                    fused_model.add_module(names[i], fused_linear_relu_layer)
-                    i += 2                
-                else: 
-                    fused_model.add_module(*list(self.names_layers())[i])
-                    i += 1
-            else:
-                fused_model.add_module(*list(self.names_layers())[i])
+            name, layer = names_layers[i]
+
+            if isinstance(layer, Conv2d):
+                next_layers = names_layers[i+1 : i+3]
+
+                if len(next_layers) >= 2:
+                    _, batchnorm2d = next_layers[0]
+                    _, activation = next_layers[1]
+
+                    if isinstance(batchnorm2d, BatchNorm2d) and isinstance(activation, ReLU):
+                        fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(layer, batchnorm2d)
+                        fused_conv2d_batchnorm2d_relu_layer = fuse_conv2d_relu(fused_conv2d_batchnorm2d_layer, activation)
+                        fused_model.add_module(name, fused_conv2d_batchnorm2d_relu_layer) 
+                        i += 3
+                        continue
+                    elif isinstance(batchnorm2d, BatchNorm2d) and isinstance(activation, ReLU6):
+                        fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(layer, batchnorm2d)
+                        fused_conv2d_batchnorm2d_relu6_layer = fuse_conv2d_relu6(fused_conv2d_batchnorm2d_layer, activation)
+                        fused_model.add_module(name, fused_conv2d_batchnorm2d_relu6_layer) 
+                        i += 3
+                        continue
+                if len(next_layers) >= 1:
+                    _, next_layer = next_layers[0]
+                    if isinstance(next_layer, BatchNorm2d):
+                        fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(layer, next_layer)
+                        fused_model.add_module(name, fused_conv2d_batchnorm2d_layer)                         
+                        i += 2
+                        continue
+                    elif isinstance(next_layer, ReLU):
+                        fused_conv2d_relu_layer = fuse_conv2d_relu(layer, next_layer)
+                        fused_model.add_module(name, fused_conv2d_relu_layer)
+                        i += 2
+                        continue
+                    elif isinstance(next_layer, ReLU6):
+                        fused_conv2d_relu6_layer = fuse_conv2d_relu6(layer, next_layer)
+                        fused_model.add_module(name, fused_conv2d_relu6_layer)
+                        i += 2
+                        continue
+                fused_model.add_module(*names_layers[i])
                 i += 1
+
+            elif i+1 < length and isinstance(layer, Linear):
+                _, next_layer = names_layers[i+1]
+                if isinstance(next_layer, ReLU):
+                    fused_linear_relu_layer = fuse_linear_relu(layer, next_layer)
+                    fused_model.add_module(name, fused_linear_relu_layer)
+                    i += 2
+                    continue
+                elif isinstance(next_layer, ReLU6):
+                    fused_linear_relu6_layer = fuse_linear_relu6(layer, next_layer)
+                    fused_model.add_module(name, fused_linear_relu6_layer)
+                    i += 2
+                    continue
+
+                fused_model.add_module(*names_layers[i])
+                i += 1
+
+            else:
+
+                fused_model.add_module(*names_layers[i])
+                i += 1
+
+
+
+            #     if i+2 <  length and isinstance(self[names[i+1]], (BatchNorm2d)) and isinstance(self[names[i+2]], ReLU):
+            #         fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(self[names[i]], self[names[i+1]])
+            #         fused_conv2d_batchnorm2d_relu_layer = fuse_conv2d_relu(fused_conv2d_batchnorm2d_layer, self[names[i+2]])
+            #         fused_model.add_module(names[i], fused_conv2d_batchnorm2d_relu_layer)
+            #         i += 3
+            #     elif i+1 <  length and isinstance(self[names[i+1]], (BatchNorm2d)):
+            #         fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(self[names[i]], self[names[i+1]])
+            #         fused_model.add_module(names[i], fused_conv2d_batchnorm2d_layer)
+            #         i += 2
+            #     elif i+1 <  length and isinstance(self[names[i+1]], ReLU):
+            #         fused_conv2d_relu_layer = fuse_conv2d_relu(self[names[i]], self[names[i+1]])
+            #         fused_model.add_module(names[i], fused_conv2d_relu_layer)
+            #         i += 2
+            #     else: 
+            #         fused_model.add_module(*names_layers[i])
+            #         i += 1
+            # elif isinstance(self[names[i]], Linear):
+            #     if i+1 <  length and isinstance(self[names[i+1]], ReLU):
+            #         fused_linear_relu_layer = fuse_linear_relu(self[names[i]], self[names[i+1]])
+            #         fused_model.add_module(names[i], fused_linear_relu_layer)
+            #         i += 2                
+            #     else: 
+            #         fused_model.add_module(*names_layers[i])
+            #         i += 1
+            # else:
+            #     fused_model.add_module(*names_layers[i])
+            #     i += 1
 
         return fused_model
 
@@ -369,13 +426,10 @@ class Sequential(nn.Sequential):
 
                 if not isinstance(config["prune_channel"]["sparsity"], (float, int)) or config["prune_channel"]["sparsity"] != 0:
 
-
                     def prune_channel_layer(layer):
                         layer.is_pruned_channel = True
 
                     model.apply(prune_channel_layer)
-                    model.is_pruned_channel = True
-
                     model.init_prune_channel()
 
             elif compression_type == "quantize":
@@ -385,13 +439,10 @@ class Sequential(nn.Sequential):
                     # layer.quantize_type = config["quantize"]["type"]
 
                 if config["quantize"]["scheme"] != QuantizationScheme.NONE:
-                    
                     if config["quantize"]["scheme"] == QuantizationScheme.STATIC and calibration_data is None:
                         raise ValueError(f"Pass a calibration data when doing static quantization!")
 
                     model.apply(quantize_layer)
-                    model.is_quantized = True
-
                     model.init_quantize(calibration_data)
             else:
                 raise NotImplementedError(f"Compression of type {compression_type} not implemented!")
@@ -571,9 +622,17 @@ class Sequential(nn.Sequential):
         if scheme == QuantizationScheme.NONE:
             return
 
+        if scheme != QuantizationScheme.STATIC:
+            for layer in self.layers():
+                layer.init_quantize(bitwidth, scheme, granularity)
+            return
+        
+        setattr(self, "input_quantize", Quantize(
+            self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
+        ))
+        previous_output_quantize = self.input_quantize
         for layer in self.layers():
-            layer.init_quantize(bitwidth, scheme, granularity)
-
+            previous_output_quantize = layer.init_quantize(bitwidth, scheme, granularity, previous_output_quantize)
         self.train()
         if scheme == QuantizationScheme.STATIC:
             self(calibration_data)
@@ -715,26 +774,6 @@ class Sequential(nn.Sequential):
 
     @torch.no_grad
     def test(self, device:str = "cpu", include_dir="./", src_dir="./", var_name="model"):
-        # self.cpu()
-        # if hasattr(self, "quantize_type") and (getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_TENSOR
-        #                                            or getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_CHANNEL):
-        #     return self(quantize_per_tensor_assy(
-        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantize_bitwidth))
-        
-        # Generate test input data
-        # if "_dmc" in self.__dict__ and "quantization" in self.__dict__["_dmc"] and self.__dict__["_dmc"]["quantization"]["type"] == STATIC_QUANTIZATION_PER_TENSOR:
-        #     test_input_def = f"\nconst uint8_t test_input[] = {{\n"
-        #     for line in torch.split(quantize_per_tensor_assy(
-        #             self.test_input, 
-        #             self.__dict__["_dmc"]["quantization"]["input_scale"],
-        #             self.__dict__["_dmc"]["quantization"]["input_zero_point"],
-        #             self.__dict__["_dmc"]["quantization"]["bitwidth"],
-        #         ).flatten(), 8):
-        #         test_input_def += "    " + ", ".join(
-        #             [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
-        #         ) + ",\n"
-        #     test_input_def += "};\n"
-        # else:
 
         import random
         index = random.randint(0, self.test_input.size(0)-1)

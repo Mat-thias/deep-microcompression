@@ -49,15 +49,13 @@ class Quantize:
         self.avg_exp = avg_exp
         self.rmin = None
         self.rmax = None
-        self.rmin_update = True 
-        self.rmax_update = True 
 
         self.base = base
 
         if base is not None:
             if base_accumulator is None:
                 if scale_type == QuantizationScaleType.ASSYMMETRIC:
-                    self.base_accumulator: Callable[[Iterable["Quantize"]], Tuple[torch.Tensor, torch.Tensor]] = lambda base : prod([b.scale for b in base]), sum([b.zero_point for b in base])
+                    self.base_accumulator: Callable[[Iterable["Quantize"]], Tuple[torch.Tensor, torch.Tensor]] = lambda base : (prod([b.scale for b in base]), sum([b.zero_point for b in base]))
                 else:
                     self.base_accumulator: Callable[[Iterable["Quantize"]], torch.Tensor] = lambda base : prod([b.scale for b in base])
             else:

@@ -15,61 +15,70 @@ class LinearReLU(Linear):
         self.relu = ReLU()
 
     def forward(self, input):
-        input = super().forward(input)
-        input = self.relu.forward(input)
+        weight = self.weight
+        bias = self.bias
 
-        return input
+        if self.is_compressed:
+            if self.is_pruned_channel:
+                weight = self.weight_prune_channel(weight)
+                if self.bias is not None:
+                    bias = self.bias_prune_channel(bias)
+
+            if self.is_quantized:
+                if hasattr(self, "input_quantize"): 
+                    input = self.input_quantize(input)
+                weight = self.weight_quantize(weight)
+                if self.bias is not None and hasattr(self, "bias_quantize"):
+                    bias = self.bias_quantize(bias)
+
+        input = nn.functional.linear(input, weight, bias)
+        output = self.relu.forward(input)
+
+        if self.is_compressed:
+            if self.is_quantized:
+                if hasattr(self, "output_quantize"):
+                    output = self.output_quantize(output)
+
+
+        return output
     
 
+
+class LinearReLU6(Linear):
+
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+        self.relu6 = ReLU6()
+
+    def forward(self, input):
+        weight = self.weight
+        bias = self.bias
+
+        if self.is_compressed:
+            if self.is_pruned_channel:
+                weight = self.weight_prune_channel(weight)
+                if self.bias is not None:
+                    bias = self.bias_prune_channel(bias)
+
+            if self.is_quantized:
+                if hasattr(self, "input_quantize"): 
+                    input = self.input_quantize(input)
+                weight = self.weight_quantize(weight)
+                if self.bias is not None and hasattr(self, "bias_quantize"):
+                    bias = self.bias_quantize(bias)
+
+        input = nn.functional.linear(input, weight, bias)
+        output = self.relu6.forward(input)
+
+        if self.is_compressed:
+            if self.is_quantized:
+                if hasattr(self, "output_quantize"):
+                    output = self.output_quantize(output)
+
+        return output
     
-    @torch.no_grad()
-    def init_quantize(self, bitwidth, scheme, granularity):
-        if not self.is_pruned_channel:
-            setattr(self, "weight_quantize", Quantize(
-                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC
-            ))
-        else:
-            setattr(self, "weight_quantize", Quantize(
-                self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, prune_channel=self.weight_prune_channel
-            ))
 
-        if scheme == QuantizationScheme.STATIC:
-            setattr(self, "input_quantize", Quantize(
-                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
-            ))
-            setattr(self, "output_quantize", Quantize(
-                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
-            ))
-
-        if self.bias is not None:
-            if not self.is_pruned_channel:
-                # if scheme == QuantizationScheme.DYNAMIC:
-                #     setattr(self, "bias_quantize", Quantize(
-                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
-                #     ))
-                if scheme == QuantizationScheme.STATIC:
-                    setattr(self, "bias_quantize", Quantize(
-                        self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize]
-                    ))
-            else:
-                # if scheme == QuantizationScheme.DYNAMIC:
-                #     setattr(self, "bias_quantize", Quantize(
-                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize], prune_channel=self.bias_prune_channel
-                #     ))
-                if scheme == QuantizationScheme.STATIC:
-                    setattr(self, "bias_quantize", Quantize(
-                        self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize], prune_channel=self.bias_prune_channel
-                    ))
-
-        # calibration
-        if scheme == QuantizationScheme.DYNAMIC:
-            self.weight_quantize.update_parameters(self.weight) 
-            # if self.bias is not None:
-            #     self.bias_quantize.update_parameters(self.bias)
- 
-
-
-    
 
 class Conv2dReLU(Conv2d):
 
@@ -79,8 +88,79 @@ class Conv2dReLU(Conv2d):
         self.relu = ReLU()
 
     def forward(self, input):
-        input = super().forward(input)
-        input = self.relu.forward(input)
 
-        return input
+        weight = self.weight
+        bias = self.bias
+
+        if self.is_compressed:
+            if self.is_pruned_channel:
+                weight = self.weight_prune_channel(weight)
+                if self.bias is not None:
+                    bias = self.bias_prune_channel(bias)
+
+            if self.is_quantized:
+                if hasattr(self, "input_quantize"): 
+                    input = self.input_quantize(input)
+                weight = self.weight_quantize(weight)
+                if self.bias is not None and hasattr(self, "bias_quantize"):
+                    bias = self.bias_quantize(bias)
+                    
+        
+        input =  nn.functional.pad(input, self.pad, "constant", 0) 
+        input = nn.functional.conv2d(
+            input, weight, bias,
+            self.stride, self.padding,
+            self.dilation, self.groups
+        )
+        output = self.relu.forward(input)
+
+        if self.is_compressed:
+            if self.is_quantized:
+                if hasattr(self, "output_quantize"):
+                    output = self.output_quantize(output)
+        return output
+    
+
+class Conv2dReLU6(Conv2d):
+
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+        self.relu6 = ReLU6()
+
+    def forward(self, input):
+
+        weight = self.weight
+        bias = self.bias
+
+        if self.is_compressed:
+            if self.is_pruned_channel:
+                weight = self.weight_prune_channel(weight)
+                if self.bias is not None:
+                    bias = self.bias_prune_channel(bias)
+
+            if self.is_quantized:
+                if hasattr(self, "input_quantize"): 
+                    input = self.input_quantize(input)
+                weight = self.weight_quantize(weight)
+                if self.bias is not None and hasattr(self, "bias_quantize"):
+                    bias = self.bias_quantize(bias)
+                    
+        
+        input =  nn.functional.pad(input, self.pad, "constant", 0) 
+        input = nn.functional.conv2d(
+            input, weight, bias,
+            self.stride, self.padding,
+            self.dilation, self.groups
+        )
+        output = self.relu6.forward(input)
+
+        if self.is_compressed:
+            if self.is_quantized:
+                if hasattr(self, "output_quantize"):
+                    output = self.output_quantize(output)
+        return output
+    
+
+
     
