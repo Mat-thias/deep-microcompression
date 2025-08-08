@@ -8,17 +8,15 @@
 #ifndef LAYER_H
 #define LAYER_H
 
+#include "../core/define.h"
+
 #include <stdint.h>  // For int8_t type
 #include <float.h>   // For floating-point constants
 #include <math.h>    // For math operations
 
 
-#define NONE 0
-#define DYNAMIC 1
-#define STATIC 2
-
-
-// #define QUANTIZATION_SCHEME NONE
+// #define QUANTIZATION_SCHEME DYNAMIC 
+// #define QUANTIZATION_GRANULARITY PER_TENSOR
 
 #if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 

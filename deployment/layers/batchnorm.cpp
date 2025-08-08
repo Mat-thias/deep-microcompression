@@ -21,6 +21,18 @@ void BatchNorm2d::forward(float* input, float* output) {
     for (uint32_t n = 0; n < this->input_channel_size; n++) {
         for (uint32_t m = 0; m < this->input_row_size; m++) {
             for (uint32_t l = 0; l < this->input_col_size; l++) {
+
+                // set_value(
+                //     output, 
+                //     ((n * this->input_row_size * this->input_col_size) + 
+                //     (m * this->input_col_size) + l),
+                //     (get_value(
+                //         input, 
+                //         ((n * this->input_row_size * this->input_col_size) + 
+                //         (m * this->input_col_size) + l) 
+                //     )  * this->folded_weight[n]) + this->folded_bias[n]
+                // );
+
                 output[((n * this->input_row_size * this->input_col_size) + 
                         (m * this->input_col_size) + 
                         l)] = 

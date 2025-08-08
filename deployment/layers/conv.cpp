@@ -73,13 +73,7 @@ void Conv2d::forward(float* input, float* output) {
             // Output spatial dimensions loops
             for (uint32_t m = 0; m < this->output_row_size; m++) {
                 for (uint32_t l = 0; l < this->output_col_size; l++) {
-                    
-                    if (this->bias) {
-                        output_temp = this->bias[n];
-                    }
-                    else {
-                        output_temp = 0;
-                    }
+                    output_temp = this->bias ? this->bias[n] : 0;
 
                     for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
                         k = g * input_channel_per_group + c_in;
@@ -95,12 +89,29 @@ void Conv2d::forward(float* input, float* output) {
                                                 (c_in * this->kernel_row_size * kernel_col_size) + 
                                                 (j * this->kernel_col_size) + 
                                                 i];
+                                // output_temp += get_value(
+                                //     input,
+                                //     (k * padded_row_size * padded_col_size) +
+                                //     ((j + m * this->stride_row) * padded_col_size) + 
+                                //     (i + l * this->stride_col)
+                                // ) *
+                                // get_value(
+                                //     this->weight, 
+                                //     (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //     (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //     (j * this->kernel_col_size) + i
+                                // );
                             }
                         }
                     }
                     output[(n * this->output_row_size * this->output_col_size) + 
                             (m * this->output_col_size) + 
                             l] = output_temp;
+                    // set_value(output, 
+                    //     (n * this->output_row_size * this->output_col_size) + 
+                    //     (m * this->output_col_size) + l,
+                    //     output_temp
+                    // );
                 }
             }
         }
@@ -111,6 +122,8 @@ void Conv2d::forward(float* input, float* output) {
 
 
 #elif QUANTIZATION_SCHEME == DYNAMIC // QUANTIZATION_SCHEME
+#if QUANTIZATION_GRANULARITY == PER_TENSOR
+
 
 /**
  * @brief Constructor for dynamically quantized Conv2d layer
@@ -182,15 +195,28 @@ void Conv2d::forward(float* input, float* output) {
                         for (uint32_t j = 0; j < this->kernel_row_size; j++) {
                             for (uint32_t i = 0; i < this->kernel_col_size; i++) {
 
-                                // Convolution operation
-                                output_temp += 
-                                    input[(k * padded_row_size * padded_col_size) +
+                                // // Convolution operation
+                                // output_temp += 
+                                //     input[(k * padded_row_size * padded_col_size) +
+                                //         ((j + m * this->stride_row) * padded_col_size) + 
+                                //         (i + l * this->stride_col)] *
+                                //     this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //                 (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //                 (j * this->kernel_col_size) + 
+                                //                 i];
+                                // int8_t weight = get_packed_value(this->weight, 
+                                //     (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //     (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //     (j * this->kernel_col_size) + i
+                                // );
+                                output_temp += input[(k * padded_row_size * padded_col_size) +
                                         ((j + m * this->stride_row) * padded_col_size) + 
                                         (i + l * this->stride_col)] *
-                                    this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                (j * this->kernel_col_size) + 
-                                                i];
+                                get_packed_value(this->weight, 
+                                    (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                    (c_in * this->kernel_row_size * kernel_col_size) + 
+                                    (j * this->kernel_col_size) + i
+                                );
                             }
                         }
                     }
@@ -198,15 +224,26 @@ void Conv2d::forward(float* input, float* output) {
                         (m * this->output_col_size) + 
                         l] = this->bias ? 
                         output_temp * this->weight_scale + this->bias[n]:
-                        output_temp * this->weight_scale;    
+                        output_temp * this->weight_scale;  
+                    // set_value(output, 
+                    //     (n * this->output_row_size * this->output_col_size) + 
+                    //     (m * this->output_col_size) + l,
+                    //     this->bias ? 
+                    //     output_temp * this->weight_scale + this->bias[n]:
+                    //     output_temp * this->weight_scale
+                    // );
                 }
             }
         }
     }
 }
 
+#endif // QUANTIZATION_GRANULARITY
+
 
 #elif QUANTIZATION_SCHEME == STATIC // QUANTIZATION_SCHEME
+
+#if QUANTIZATION_GRANULARITY == PER_TENSOR
 
 Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
                uint32_t output_channel_size, uint32_t kernel_row_size, uint32_t kernel_col_size,
@@ -269,48 +306,51 @@ void Conv2d::forward(int8_t* input, int8_t* output) {
                 for (uint32_t l = 0; l < this->output_col_size; l++) {
                     
                     // Calculate output index
-                    output_index = (n * this->output_row_size * this->output_col_size) + 
-                                (m * this->output_col_size) + 
-                                l;
-                    if (this->bias) {
-                        output_temp = this->bias[n];
-                    }
-                    else {
-                        output_temp = 0;
-                    }
+                    // output_index = (n * this->output_row_size * this->output_col_size) + 
+                    //             (m * this->output_col_size) + 
+                    //             l;
+                    output_temp = this->bias ? this->bias[n] : 0;
+                    // if (this->bias) {
+                    //     output_temp = this->bias[n];
+                    // }
+                    // else {
+                    //     output_temp = 0;
+                    // }
 
                     for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
                         k = g * input_channel_per_group + c_in;
                         for (uint32_t j = 0; j < this->kernel_row_size; j++) {
                             for (uint32_t i = 0; i < this->kernel_col_size; i++) {
-                                int32_t in = ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-                                                   ((j + m * this->stride_row) * this->input_col_size) + 
-                                                   (i + l * this->stride_col)] - this->input_zero_point);
-                                int32_t we = (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                         (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                         (j * this->kernel_col_size) + 
-                                                         i];
-
-                                int32_t te = ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-                                                   ((j + m * this->stride_row) * this->input_col_size) + 
-                                                   (i + l * this->stride_col)] - this->input_zero_point) *
-                                    (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                         (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                         (j * this->kernel_col_size) + 
-                                                         i];
-
-
-
-
                                 // Convolution operation
-                                output_temp += 
-                                    ((int32_t)input[(k * padded_row_size * padded_col_size) +
-                                                   ((j + m * this->stride_row) * padded_col_size) + 
-                                                   (i + l * this->stride_col)] - this->input_zero_point) *
-                                    (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                         (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                         (j * this->kernel_col_size) + 
-                                                         i];
+                                // output_temp += 
+                                //     ((int32_t)input[(k * padded_row_size * padded_col_size) +
+                                //                    ((j + m * this->stride_row) * padded_col_size) + 
+                                //                    (i + l * this->stride_col)] - this->input_zero_point) *
+                                //     (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //                          (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //                          (j * this->kernel_col_size) + 
+                                //                          i];
+
+                                int8_t inp = get_packed_value(input, 
+                                    (k * padded_row_size * padded_col_size) +
+                                    ((j + m * this->stride_row) * padded_col_size) + 
+                                    (i + l * this->stride_col));
+
+                                int8_t wei = get_packed_value(this->weight, 
+                                    (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                    (c_in * this->kernel_row_size * kernel_col_size) + 
+                                    (j * this->kernel_col_size) + i
+                                );
+
+                                output_temp += ((int32_t)get_packed_value(input, 
+                                    (k * padded_row_size * padded_col_size) +
+                                    ((j + m * this->stride_row) * padded_col_size) + 
+                                    (i + l * this->stride_col))  - this->input_zero_point) *
+                                get_packed_value(this->weight, 
+                                    (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                    (c_in * this->kernel_row_size * kernel_col_size) + 
+                                    (j * this->kernel_col_size) + i
+                                );
                             }
                         }
                     }
@@ -318,15 +358,24 @@ void Conv2d::forward(int8_t* input, int8_t* output) {
                     output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
                     output_temp += this->output_zero_point;
                     
+                    set_packed_value(output, 
+                        (n * this->output_row_size * this->output_col_size) + 
+                        (m * this->output_col_size) + 
+                        l, 
+                        output_temp
+                    );
                     // Clamp to int8_t range
-                    output[output_index] = output_temp < -128 ? (int8_t)-128 : 
-                                         (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
+                    // output[(n * this->output_row_size * this->output_col_size) + 
+                    //     (m * this->output_col_size) + 
+                    //     l] = output_temp < -128 ? (int8_t)-128 : 
+                    //             (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
 
                 }
             }
         }
     }
 }
+#endif // QUANTIZATION_GRANULARITY
 
 
 #endif // QUANTIZATION_SCHEME

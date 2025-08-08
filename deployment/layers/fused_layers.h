@@ -7,11 +7,11 @@
 #include "pad.h"
 
 
-inline float relu(float val) { return (val < 0) ? 0 : val;}
-inline int32_t relu(int32_t val) { return (val < 0) ? 0 : val;}
+// inline float relu(float val) { return (val < 0) ? 0 : val;}
+// inline int32_t relu(int32_t val) { return (val < 0) ? 0 : val;}
 
-inline float relux(float val, float x) { return (val < 0) ? 0 : (val > x) ? x : val;}
-inline int32_t relux(int32_t val, int32_t x) { return (val < 0) ? 0 : (val > x) ? x : val;}
+// inline float relux(float val, float x) { return (val < 0) ? 0 : (val > x) ? x : val;}
+// inline int32_t relux(int32_t val, int32_t x) { return (val < 0) ? 0 : (val > x) ? x : val;}
 
 class Conv2dReLU: public Conv2d {
 public:

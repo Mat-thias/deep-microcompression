@@ -37,13 +37,14 @@ Linear::Linear(uint32_t output_size, uint32_t input_size,
 void Linear::forward(float* input, float* output) {
     float output_temp;
     for (uint32_t j = 0; j < this->output_size; j++) {
-        if (this->bias) {output_temp =  this->bias[j];}
-        else {output_temp =  0;}
+        output_temp = this->bias ? this->bias[j] : 0;
         // Matrix-vector multiplication
         for (uint32_t i = 0; i < this->input_size; i++) {
             output_temp += input[i] * this->weight[(j * this->input_size) + i];
+            // output_temp += get_value(input, i) * get_value(this->weight, ((j * this->input_size) + i));
         }
         output[j] = output_temp;
+        // set_value(output, j, output_temp);
     }
 }
 
@@ -51,6 +52,7 @@ void Linear::forward(float* input, float* output) {
 
 #elif QUANTIZATION_SCHEME == DYNAMIC
 
+#if QUANTIZATION_GRANULARITY == PER_TENSOR
 
 /**
  * @brief Constructor for dynamically quantized Linear layer
@@ -84,26 +86,25 @@ void Linear::forward(float* input, float* output) {
         // output[j] = 0;
         output_temp = 0;
         for (uint32_t i = 0; i < this->input_size; i++) {
-            #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-                // 8-bit weights
-                output_temp += input[i] * this->weight[(j * this->input_size) + i];
-            #elif QUANTIZATION_BITWIDTH == 4
-                // 4-bit weights (packed 2 values per byte)
-                output[j] += input[i] * 
-                    ((int8_t)(((this->weight[((j * this->input_size) + i)>>1] >> 
-                    ((((j * this->input_size) + i) & 1) << 2)) & 0x0F) << 4) >> 4) * 
-                    this->weight_scale;
-            #endif // QUANTIZATION_BITWIDTH
+            // output_temp += input[i] * this->weight[(j * this->input_size) + i];
+            output_temp += input[i] * get_packed_value(this->weight, (j * this->input_size) + i);
         }
-        output[j] = output_temp * this->weight_scale;
-        if (this->bias) {
-            output[j] +=  this->bias[j];
-        }
+        output[j] = this->bias ? 
+                output_temp * this->weight_scale + this->bias[j] :
+                output_temp * this->weight_scale;
+        // set_value(output, j, 
+        //     this->bias ? 
+        //     output_temp * this->weight_scale + this->bias[j] :
+        //     output_temp * this->weight_scale);
     }
 }
 
+#endif // QUANTIZATION_GRANULARITY
+
 
 #elif QUANTIZATION_SCHEME == STATIC
+
+#if QUANTIZATION_GRANULARITY == PER_TENSOR
 
 
 Linear::Linear(uint32_t output_size, uint32_t input_size, const int8_t* weight, const int32_t* bias,
@@ -134,33 +135,31 @@ void Linear::forward(int8_t* input, int8_t* output) {
 
     for (uint32_t j = 0; j < this->output_size; j++) {
 
-        if (this->bias) {
-            output_temp =  this->bias[j];
-        }
-        else {
-            output_temp =  0;
-        }
+        output_temp = this->bias ? this->bias[j] : 0;
+        // if (this->bias) {
+        //     output_temp =  this->bias[j];
+        // }
+        // else {
+        //     output_temp =  0;
+        // }
         for (uint32_t i = 0; i < this->input_size; i++) {
-            #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-                // 8-bit weights
-                output_temp += ((int32_t)input[i] - this->input_zero_point) * 
-                             (int32_t)this->weight[(j * this->input_size) + i];
-            #elif QUANTIZATION_BITWIDTH == 4
-                // 4-bit weights (packed 2 values per byte)
-                output_temp += ((int32_t)input[i] - this->input_zero_point) * 
-                    (int32_t)((int8_t)(((this->weight[((j * this->input_size) + i)>>1] >> 
-                    ((((j * this->input_size) + i) & 1) << 2)) & 0x0F) << 4) >> 4);
-            #endif // QUANTIZATION_BITWIDTH
+            output_temp += ((int32_t)get_packed_value(input, i) - this->input_zero_point) *
+                        (int32_t)get_packed_value(this->weight, (j * this->input_size) + i);
+    
+            // output_temp += ((int32_t)input[i] - this->input_zero_point) * 
+            //                 (int32_t)this->weight[(j * this->input_size) + i];
         }
         
         // Requantize to 8-bit
         output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
         output_temp += this->output_zero_point;
         
+        set_packed_value(output, j, output_temp);
         // Clamp to int8_t range
-        output[j] = output_temp < -128 ? (int8_t)-128 : 
-                   (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
+        // output[j] = output_temp < -128 ? (int8_t)-128 : 
+        //            (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
     }
 }
+#endif // QUANTIZATION_GRANULARITY
 
 #endif // QUANTIZATION_SCHEME

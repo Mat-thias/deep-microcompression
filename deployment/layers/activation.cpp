@@ -33,10 +33,10 @@ ReLU::ReLU(uint32_t input_size) {
 void ReLU::forward(float* input, float* output) {
     // Apply ReLU function element-wise
     for (uint32_t i = 0; i < this->input_size; i++) {
-        output[i] = (input[i] > 0) ? input[i] : 0;
+        output[i] = relu(input[i]);
+        // set_value(output, i, relu(get_value(input, i)));
     }
 }
-
 
 
 ReLU6::ReLU6(uint32_t input_size) {
@@ -46,7 +46,8 @@ ReLU6::ReLU6(uint32_t input_size) {
 void ReLU6::forward(float* input, float* output) {
     // Apply ReLU6 function element-wise
     for (uint32_t i = 0; i < this->input_size; i++) {
-        output[i] = (input[i] < 0) ? 0 : (input[i] > 6) ? 6 : input[i];
+        output[i] = relu6(input[i]);
+        // set_value(output, i, relu6(get_value(input, i)));
     }
 }
 
@@ -62,7 +63,8 @@ ReLU::ReLU(uint32_t input_size, int8_t input_zero_point) {
 void ReLU::forward(int8_t* input, int8_t* output) {
     // Apply quantized ReLU function element-wise
     for (uint32_t i = 0; i < this->input_size; i++) {
-        output[i] = (input[i] > this->input_zero_point) ? input[i] : this->input_zero_point;
+        // output[i] = relu_zero_point(input[i], this->input_zero_point);
+        set_packed_value(output, i, relu_zero_point(get_packed_value(input, i), this->input_zero_point));
     }
 }
 
@@ -75,7 +77,8 @@ ReLU6::ReLU6(uint32_t input_size, int8_t input_zero_point, int8_t input_six_poin
 void ReLU6::forward(int8_t* input, int8_t* output) {
     // Apply quantized ReLU6 function element-wise
     for (uint32_t i = 0; i < this->input_size; i++) {
-        output[i] = (input[i] < this->input_zero_point) ? this->input_zero_point : (input[i] > this->input_six_point) ? this->input_six_point : input[i];
+        set_packed_value(output, i, relu6_zero_point(get_packed_value(input, i), this->input_zero_point, this->input_six_point));
+        // output[i] = relu6_zero_point(input[i], this->input_zero_point, this->input_six_point);
     }
 }
 
