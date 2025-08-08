@@ -8,6 +8,7 @@ __all__ = [
 ]
 
 import copy
+import math
 from os import path
 import itertools
 from typing import (
@@ -31,7 +32,7 @@ from ..compressors import Quantize
 from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
-
+    convert_tensor_to_bytes_var,
     QuantizationScheme,
     QuantizationScaleType,
     QuantizationGranularity,
@@ -725,8 +726,8 @@ class Sequential(nn.Sequential):
             workspace_def = f"float workspace[MAX_OUTPUT_EVEN_SIZE + MAX_OUTPUT_ODD_SIZE];\n\n"
         else:
             workspace_header = (
-                f"#define MAX_OUTPUT_EVEN_SIZE {max_output_even_size}\n"
-                f"#define MAX_OUTPUT_ODD_SIZE {max_output_odd_size}\n"
+                f"#define MAX_OUTPUT_EVEN_SIZE {math.ceil(max_output_even_size/(8//self.input_quantize.bitwidth))}\n"
+                f"#define MAX_OUTPUT_ODD_SIZE {math.ceil(max_output_odd_size/(8//self.input_quantize.bitwidth))}\n"
                 f"extern int8_t workspace[MAX_OUTPUT_EVEN_SIZE + MAX_OUTPUT_ODD_SIZE];\n\n"
             )
             workspace_def = f"int8_t workspace[MAX_OUTPUT_EVEN_SIZE + MAX_OUTPUT_ODD_SIZE];\n\n"
@@ -777,19 +778,19 @@ class Sequential(nn.Sequential):
 
         import random
         index = random.randint(0, self.test_input.size(0)-1)
-        index = 0
+        # index = 0
 
         test_input = self.test_input[index]
         test_output = self(test_input.unsqueeze(dim=0).clone().to(device))
 
         if self.is_quantized and self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"] == QuantizationScheme.STATIC:
-            
-            test_input_def = f"\nconst int8_t test_input[] = {{\n"
-            for line in torch.split(self.input_quantize.apply(test_input).flatten(), 28):
-                test_input_def += "    " + ", ".join(
-                    [f"{val:4d}" for val in line]
-                ) + ",\n"
-            test_input_def += "};\n"
+            _, test_input_def = convert_tensor_to_bytes_var(self.input_quantize.apply(test_input), "test_input", self.input_quantize.bitwidth)
+            # test_input_def = f"\nconst int8_t test_input[] = {{\n"
+            # for line in torch.split(self.input_quantize.apply(test_input).flatten(), 28):
+            #     test_input_def += "    " + ", ".join(
+            #         [f"{val:4d}" for val in line]
+            #     ) + ",\n"
+            # test_input_def += "};\n"
 
             test_output = self.output_quantize.apply(test_output)
 
