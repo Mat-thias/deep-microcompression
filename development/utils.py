@@ -246,6 +246,7 @@ def quantize_per_tensor_assy(tensor_real: torch.Tensor,
             # torch.round(tensor_real / scale) + zero_point, qmin, qmax
             round_ste(tensor_real / scale) + zero_point, qmin, qmax
         )
+    
     return torch.clamp(
         # torch.round(tensor_real / scale) + zero_point, qmin, qmax
         round_ste(tensor_real / scale) + zero_point, qmin, qmax

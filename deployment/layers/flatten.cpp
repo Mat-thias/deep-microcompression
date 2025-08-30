@@ -8,22 +8,7 @@
 #include "flatten.h"
 
 
-
-
-#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
-
-Flatten::Flatten(uint32_t input_size) {
-    this->input_size = input_size;
-}
-
-void Flatten::forward(int8_t* input, int8_t* output) {
-    // Perform element-wise copy (no transformation needed)
-    for (uint32_t i = 0; i < this->input_size; i++) {
-        output[i] = input[i];
-    }
-}
-
-#else // DYNAMIC_QUANTIZATION_PER_TENSOR
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 
 /**
  * @brief Constructor for floating-point Flatten layer
@@ -47,41 +32,24 @@ void Flatten::forward(float* input, float* output) {
     // Perform element-wise copy (no transformation needed)
     for (uint32_t i = 0; i < this->input_size; i++) {
         output[i] = input[i];
+        // set_value(output, i, get_value(input, i));
     }
 }
 
 
+#else // QUANTIZATION_SCHEME
 
-#endif // QUANTIZATION_TYPE
 
-// #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
+Flatten::Flatten(uint32_t input_size) {
+    this->input_size = input_size;
+}
 
-// #else // STATIC_QUANTIZATION_PER_TENSOR
+void Flatten::forward(int8_t* input, int8_t* output) {
+    // Perform element-wise copy (no transformation needed)
+    for (uint32_t i = 0; i < this->input_size; i++) {
+        // output[i] = input[i];
+        set_packed_value(output, i, get_packed_value(input, i));
+    }
+}
 
-// /**
-//  * @brief Constructor for quantized Flatten layer
-//  * @param input_size Number of elements in input tensor
-//  * 
-//  * @note Quantized version works with int8_t values but maintains same
-//  *       behavior as floating-point version
-//  */
-// Flatten::Flatten(uint32_t input_size) {
-//     this->input_size = input_size;
-// }
-
-// /**
-//  * @brief Forward pass for quantized Flatten
-//  * @param input Pointer to quantized input tensor (int8_t)
-//  * @param output Pointer to quantized output tensor (int8_t)
-//  * 
-//  * Performs same operation as floating-point version but with int8_t values.
-//  * No quantization parameters needed as values are just copied.
-//  */
-// void Flatten::forward(int8_t* input, int8_t* output) {
-//     // Perform element-wise copy (no transformation needed)
-//     for (uint32_t i = 0; i < this->input_size; i++) {
-//         output[i] = input[i];
-//     }
-// }
-
-// #endif // STATIC_QUANTIZATION_PER_TENSOR
+#endif // QUANTIZATION_SCHEME

@@ -63,8 +63,8 @@ class Linear(Layer, nn.Linear):
                     bias = self.bias_prune_channel(bias)
 
             if self.is_quantized:
-                if hasattr(self, "input_quantize"):
-                    input = self.input_quantize(input)
+                # if hasattr(self, "input_quantize"): 
+                #     input = self.input_quantize(input)
                 weight = self.weight_quantize(weight)
                 if self.bias is not None and hasattr(self, "bias_quantize"):
                     bias = self.bias_quantize(bias)
@@ -75,6 +75,8 @@ class Linear(Layer, nn.Linear):
             if self.is_quantized:
                 if hasattr(self, "output_quantize"):
                     output = self.output_quantize(output)
+
+                    # print(self.input_quantize.zero_point, self)
 
         return output
     
@@ -123,15 +125,26 @@ class Linear(Layer, nn.Linear):
             channel_importance = importance.sum(dim=[1])
             keep_current_channel_index = torch.sort(torch.topk(channel_importance, density, dim=0).indices).values
 
+        # setattr(self, "weight_prune_channel", Prune_Channel(
+        #     module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
+        # ))
+
+        # if self.bias is not None:
+        #     setattr(self, "bias_prune_channel", Prune_Channel(
+        #         module=self, keep_current_channel_index=keep_current_channel_index
+        #     ))
+
+        self.register_buffer("keep_current_channel_index", keep_current_channel_index.to(self.weight.device))
+        self.register_buffer("keep_prev_channel_index", keep_prev_channel_index.to(self.weight.device))
+
         setattr(self, "weight_prune_channel", Prune_Channel(
-            module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
+            module=self, keep_current_channel_index=self.keep_current_channel_index, keep_prev_channel_index=self.keep_prev_channel_index
         ))
 
         if self.bias is not None:
             setattr(self, "bias_prune_channel", Prune_Channel(
-                module=self, keep_current_channel_index=keep_current_channel_index
+                module=self, keep_current_channel_index=self.keep_current_channel_index
             ))
-
         return keep_current_channel_index
 
 
@@ -139,7 +152,7 @@ class Linear(Layer, nn.Linear):
         return range(self.out_features)
 
     @torch.no_grad()
-    def init_quantize(self, bitwidth, scheme, granularity):
+    def init_quantize(self, bitwidth, scheme, granularity, previous_output_quantize=None):
         if not self.is_pruned_channel:
             setattr(self, "weight_quantize", Quantize(
                 self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC
@@ -150,8 +163,9 @@ class Linear(Layer, nn.Linear):
             ))
 
         if scheme == QuantizationScheme.STATIC:
+            assert previous_output_quantize is not None
             setattr(self, "input_quantize", Quantize(
-                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
+                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC, base=[previous_output_quantize]
             ))
             setattr(self, "output_quantize", Quantize(
                 self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
@@ -159,19 +173,11 @@ class Linear(Layer, nn.Linear):
 
         if self.bias is not None:
             if not self.is_pruned_channel:
-                # if scheme == QuantizationScheme.DYNAMIC:
-                #     setattr(self, "bias_quantize", Quantize(
-                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
-                #     ))
                 if scheme == QuantizationScheme.STATIC:
                     setattr(self, "bias_quantize", Quantize(
                         self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize]
                     ))
             else:
-                # if scheme == QuantizationScheme.DYNAMIC:
-                #     setattr(self, "bias_quantize", Quantize(
-                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize], prune_channel=self.bias_prune_channel
-                #     ))
                 if scheme == QuantizationScheme.STATIC:
                     setattr(self, "bias_quantize", Quantize(
                         self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize], prune_channel=self.bias_prune_channel
@@ -182,7 +188,9 @@ class Linear(Layer, nn.Linear):
             self.weight_quantize.update_parameters(self.weight) 
             # if self.bias is not None:
             #     self.bias_quantize.update_parameters(self.bias)
- 
+        if hasattr(self, "output_quantize"):
+            return self.output_quantize 
+        return None
 
     @torch.no_grad()
     def get_size_in_bits(self):  
@@ -238,7 +246,7 @@ class Linear(Layer, nn.Linear):
                     weight = self.weight_quantize.apply(weight)
                     if self.bias is not None and hasattr(self, "bias_quantize"):
                         bias = self.bias_quantize.apply(bias)
-                        print("compression in linear", bias.dtype, bias.shape)
+                        # print("compression in linear", bias.dtype, bias.shape)
                     
         return weight, bias
 
@@ -280,6 +288,7 @@ class Linear(Layer, nn.Linear):
             bias_bitwidth = None
             if self.is_quantized and hasattr(self, "bias_quantize"):
                 bias_bitwidth = self.bias_quantize.bitwidth
+                # print(bias.dtype, "in linear bias dtype")
             param_header, param_def = convert_tensor_to_bytes_var(
                 bias, 
                 f"{var_name}_bias",

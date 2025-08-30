@@ -8,26 +8,37 @@ __all__ = [
 ]
 
 import copy
+import math
 from os import path
 import itertools
 from typing import (
-    List, Dict, OrderedDict, Iterable, Callable, Optional, Union, Any
+    List, Dict, OrderedDict, Iterable, Callable, Optional, Union
 )
 from tqdm.auto import tqdm
 
 import torch
 from torch import nn
+from torch._jit_internal import _copy_to_script_wrapper
 from torch.utils import data
 
 # from .callback import EarlyStopper
 from ..layers.layer import Layer
+from ..layers.conv import Conv2d
+from ..layers.linear import Linear
+from ..layers.batchnorm import BatchNorm2d
+from ..layers.activation import ReLU, ReLU6
+
+from ..compressors import Quantize
 from ..utils import (
     get_quantize_scale_zero_point_per_tensor_assy,
     quantize_per_tensor_assy,
-
+    convert_tensor_to_bytes_var,
     QuantizationScheme,
+    QuantizationScaleType,
     QuantizationGranularity,
 )
+
+from .fuse import *
 
 class Sequential(nn.Sequential):
     """Extended Sequential container with additional functionality for:
@@ -45,17 +56,20 @@ class Sequential(nn.Sequential):
                 - An OrderedDict of layers
                 - Individual layer instances
         """
+
+
+        super(Sequential, self).__init__()
         setattr(self, "_dmc", dict())
 
         if len(args) == 1 and isinstance(args[0], OrderedDict):
-            super(Sequential, self).__init__(*args)
+            for key, module in args[0].items():
+                self.add_module(key, module)
         else:
-            super(Sequential, self).__init__()
             class_idx = dict()
             
             # Auto-name layers with type_index convention (e.g. conv2d_0)
             for layer in args:
-                if isinstance(layer, Layer) or isinstance(layer, nn.Module): 
+                if isinstance(layer, Layer) and isinstance(layer, nn.Module): 
                     class_idx[layer.__class__.__name__] = class_idx.get(layer.__class__.__name__, -1) + 1
                     idx = class_idx[layer.__class__.__name__]
                     layer_type = layer.__class__.__name__.lower()
@@ -63,20 +77,55 @@ class Sequential(nn.Sequential):
                 else:
                     raise TypeError(f"layer of type {type(layer)} isn't a Layer or Module.")
 
-        # Store layers in dict for easy access
-        self.layers = dict()
         self.fit_history = dict()
-        for name, layer in self.named_children():
-            self.layers[name] = layer
 
         self.is_pruned_channel = False
         self.is_quantized = False
 
+    def names_layers(self):
+        for name, layer in self._modules.items():
+            yield name, layer
+
+    def names(self):
+        for name in self._modules.keys():
+            yield name
+
+    def layers(self):
+        for layer in self._modules.values():
+            yield layer
     
+    @_copy_to_script_wrapper
+    def __getitem__(self, idx: Union[slice, str, int]) -> Union["Sequential", Layer]:
+        if isinstance(idx, slice):
+            return self.__class__(OrderedDict(list(self._modules.items())[idx]))
+        elif isinstance(idx, str):
+            return self._modules[idx]
+        elif isinstance(idx, int):
+            lenght = len(self)
+            if -lenght <= idx < lenght:
+                idx %= lenght
+                return self[list(self.names())[idx]]
+            raise IndexError(f"index {idx} is out of range")
+        else:
+            raise IndexError(f"Unknown index {index}")
+    
+
     @property
     def is_compressed(self):
         return self.is_pruned_channel or self.is_quantized
 
+    # @property
+    # def input_quantize(self):
+    #     if self.is_quantized and self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"] == QuantizationScheme.STATIC:
+    #         return self[0].input_quantize
+    #     return None
+
+
+    @property
+    def output_quantize(self):
+        if self.is_quantized and self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"] == QuantizationScheme.STATIC:
+            return self[-1].output_quantize
+        return None
 
 
     def forward(self, input):
@@ -88,6 +137,9 @@ class Sequential(nn.Sequential):
         Returns:
             Output tensor after passing through all layers
         """
+        if self.is_quantized:
+            if hasattr(self, "input_quantize"):
+                input = self.input_quantize(input)
         for i, layer in enumerate(self):
             # print(f"Layer {i} ({layer.__class__.__name__}): input shape = {input.shape} kernel_size {getattr(layer, "kernel_size", "nan")} stride {getattr(layer, "stride", "nan")} padding {getattr(layer, "padding", "nan")}")
             input = layer(input)
@@ -101,7 +153,7 @@ class Sequential(nn.Sequential):
         optimizer_fun: torch.optim.Optimizer,
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         validation_dataloader: Optional[data.DataLoader] = None, 
-        metrics: Optional[Dict[str, Callable[[torch.Tensor, torch.Tensor], float]]] = None,
+        metrics: Dict[str, Callable[[torch.Tensor, torch.Tensor], float]] = {},
         verbose: bool = True,
         callbacks: List[Callable] = [],
         device: str = "cpu"
@@ -119,13 +171,13 @@ class Sequential(nn.Sequential):
             Dictionary of training/validation metrics over time
         """
         history = dict()
-        metrics_val = dict()
-
+        metrics_values = dict()
 
         for epoch in tqdm(range(epochs)):
             # Training phase
             train_loss = 0
             train_data_len = 0
+            metrics_result = {name : 0. for name in metrics.keys()}
 
             self.train()
             for X, y_true in train_dataloader:
@@ -141,10 +193,13 @@ class Sequential(nn.Sequential):
                 train_loss += loss.item()
                 train_data_len += X.size(0)
 
+                with torch.inference_mode():
+                    for name, metric_func in metrics.items():
+                        metrics_result[name] += metric_func(y_pred.detach(), y_true)
+
             train_loss /= train_data_len
-            if metrics is not None:
-                for name, func in metrics.items():
-                    metrics_val[f"train_{name}"] = self.evaluate(train_dataloader, metric_fun=func, device=device)
+            for name in metrics.keys():
+                metrics_values[f"train_{name}"] = metrics_result[name] / train_data_len
 
 # #################################################
 #                 break
@@ -153,21 +208,10 @@ class Sequential(nn.Sequential):
             # Validation phase
             if validation_dataloader is not None:
                 self.eval()
-                with torch.inference_mode():
-                    validation_loss = 0
-                    validation_data_len = 0
-                            
-                    for X, y_true in validation_dataloader:
-                        X = X.to(device)
-                        y_true = y_true.to(device)
-                        y_pred = self(X)
-                        validation_loss += criterion_fun(y_pred, y_true).item()
-                        validation_data_len += X.size(0)
-                        
-                    validation_loss /= validation_data_len
-                    if metrics is not None:
-                        for name, func in metrics.items():
-                            metrics_val[f"validation_{name}"] = self.evaluate(validation_dataloader, metric_fun=func, device=device)
+                metrics_result = self.evaluate(validation_dataloader, metrics | {"loss": criterion_fun}, device)
+                validation_loss = metrics_result["loss"]
+                for name in metrics.keys():
+                    metrics_values[f"validation_{name}"] = metrics_result[name]
 
 #################################################
                         # break
@@ -182,7 +226,7 @@ class Sequential(nn.Sequential):
                     print(f"epoch {epoch:4d} | train loss {train_loss:.4f} | validation loss {validation_loss:.4f}", end="")
                     if metrics is not None: 
                         for name in metrics:
-                            print(f" | train {name} {metrics_val[f'train_{name}']:.4f} | validation {name} {metrics_val[f'validation_{name}']:.4f}", end="")
+                            print(f" | train {name} {metrics_values[f'train_{name}']:.4f} | validation {name} {metrics_values[f'validation_{name}']:.4f}", end="")
                     print()
 
                 # Store validation metrics
@@ -190,8 +234,8 @@ class Sequential(nn.Sequential):
                 history["validation_loss"] = history.get("validation_loss", []) + [validation_loss]
                 if metrics is not None: 
                     for name in metrics:
-                        self.fit_history[f"validation_{name}"] = self.fit_history.get(f"validation_{name}", []) + [metrics_val[f"validation_{name}"]]
-                        history[f"validation_{name}"] = history.get(f"validation_{name}", []) + [metrics_val[f"validation_{name}"]]
+                        self.fit_history[f"validation_{name}"] = self.fit_history.get(f"validation_{name}", []) + [metrics_values[f"validation_{name}"]]
+                        history[f"validation_{name}"] = history.get(f"validation_{name}", []) + [metrics_values[f"validation_{name}"]]
 
             # if validation_dataloader is None:
             else:
@@ -199,7 +243,7 @@ class Sequential(nn.Sequential):
                     print(f"epoch {epoch:4d} | train loss {train_loss:.4f}", end="")
                     if metrics is not None:
                         for name in metrics:
-                            print(f" | train {name} {metrics_val[f'train_{name}']:.4f}", end="")
+                            print(f" | train {name} {metrics_values[f'train_{name}']:.4f}", end="")
                     print()
             
             # Store training metrics
@@ -207,8 +251,8 @@ class Sequential(nn.Sequential):
             history["train_loss"] = history.get("train_loss", []) + [train_loss]
             if metrics is not None: 
                 for name in metrics:
-                    self.fit_history[f"train_{name}"] = self.fit_history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
-                    history[f"train_{name}"] = history.get(f"train_{name}", []) + [metrics_val[f"train_{name}"]]
+                    self.fit_history[f"train_{name}"] = self.fit_history.get(f"train_{name}", []) + [metrics_values[f"train_{name}"]]
+                    history[f"train_{name}"] = history.get(f"train_{name}", []) + [metrics_values[f"train_{name}"]]
 
             for callback in callbacks:
                 # if isinstance(callback, EarlyStopper):
@@ -218,14 +262,13 @@ class Sequential(nn.Sequential):
         return history
 
 
-
     @torch.inference_mode()
     def evaluate(
         self, 
         data_loader: data.DataLoader, 
-        metric_fun: Callable, 
+        metrics: Dict[str, Callable[[torch.Tensor, torch.Tensor], float]], 
         device: str = "cpu"
-    ) -> float:
+    ) -> Dict[str, float]:
         """Evaluate model accuracy on given dataset
         
         Args:
@@ -235,29 +278,134 @@ class Sequential(nn.Sequential):
         Returns:
             Accuracy percentageupdate_dynamic_quantize_per_tensor_parameters
         """
-        metric_val = 0
-        data_len = 0
-
-
 ###############################################################################################
         # Saving the a test input data
-        setattr(self, "test_input", next(iter(data_loader))[0])
+        if not hasattr(self, "test_input"):
+            setattr(self, "test_input", next(iter(data_loader))[0])
 ###############################################################################################
-
-
+        metric_results = dict()
+        data_len = 0
+        for metric_name in metrics.keys():
+            metric_results[metric_name] = 0
+            
         self.eval()
         for X, y_true in tqdm(data_loader):
+            data_len += X.size(0)
             X = X.to(device)
             y_true = y_true.to(device)
             y_pred = self(X)
-            metric_val += metric_fun(y_pred, y_true)
-            data_len += X.size(0)
-
-################################################
+            for metric_name, metric_func in metrics.items():
+                metric_results[metric_name] += metric_func(y_pred, y_true)
+    ###############################################
             # break
-################################################
+    ###############################################
+        for metric_name in metrics.keys():
+            metric_results[metric_name] /= data_len
+        return metric_results
+    
 
-        return metric_val / data_len
+    def fuse(self):
+        # names = list(self.names())
+        names_layers = list(self.names_layers())
+        length = len(self)
+
+        fused_model = Sequential()
+        i = 0
+        while i < length:
+            name, layer = names_layers[i]
+
+            if isinstance(layer, Conv2d):
+                next_layers = names_layers[i+1 : i+3]
+
+                if len(next_layers) >= 2:
+                    _, batchnorm2d = next_layers[0]
+                    _, activation = next_layers[1]
+
+                    if isinstance(batchnorm2d, BatchNorm2d) and isinstance(activation, ReLU):
+                        fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(layer, batchnorm2d)
+                        fused_conv2d_batchnorm2d_relu_layer = fuse_conv2d_relu(fused_conv2d_batchnorm2d_layer, activation)
+                        fused_model.add_module(name, fused_conv2d_batchnorm2d_relu_layer) 
+                        i += 3
+                        continue
+                    elif isinstance(batchnorm2d, BatchNorm2d) and isinstance(activation, ReLU6):
+                        fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(layer, batchnorm2d)
+                        fused_conv2d_batchnorm2d_relu6_layer = fuse_conv2d_relu6(fused_conv2d_batchnorm2d_layer, activation)
+                        fused_model.add_module(name, fused_conv2d_batchnorm2d_relu6_layer) 
+                        i += 3
+                        continue
+                if len(next_layers) >= 1:
+                    _, next_layer = next_layers[0]
+                    if isinstance(next_layer, BatchNorm2d):
+                        fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(layer, next_layer)
+                        fused_model.add_module(name, fused_conv2d_batchnorm2d_layer)                         
+                        i += 2
+                        continue
+                    elif isinstance(next_layer, ReLU):
+                        fused_conv2d_relu_layer = fuse_conv2d_relu(layer, next_layer)
+                        fused_model.add_module(name, fused_conv2d_relu_layer)
+                        i += 2
+                        continue
+                    elif isinstance(next_layer, ReLU6):
+                        fused_conv2d_relu6_layer = fuse_conv2d_relu6(layer, next_layer)
+                        fused_model.add_module(name, fused_conv2d_relu6_layer)
+                        i += 2
+                        continue
+                fused_model.add_module(*names_layers[i])
+                i += 1
+
+            elif i+1 < length and isinstance(layer, Linear):
+                _, next_layer = names_layers[i+1]
+                if isinstance(next_layer, ReLU):
+                    fused_linear_relu_layer = fuse_linear_relu(layer, next_layer)
+                    fused_model.add_module(name, fused_linear_relu_layer)
+                    i += 2
+                    continue
+                elif isinstance(next_layer, ReLU6):
+                    fused_linear_relu6_layer = fuse_linear_relu6(layer, next_layer)
+                    fused_model.add_module(name, fused_linear_relu6_layer)
+                    i += 2
+                    continue
+
+                fused_model.add_module(*names_layers[i])
+                i += 1
+
+            else:
+
+                fused_model.add_module(*names_layers[i])
+                i += 1
+
+
+
+            #     if i+2 <  length and isinstance(self[names[i+1]], (BatchNorm2d)) and isinstance(self[names[i+2]], ReLU):
+            #         fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(self[names[i]], self[names[i+1]])
+            #         fused_conv2d_batchnorm2d_relu_layer = fuse_conv2d_relu(fused_conv2d_batchnorm2d_layer, self[names[i+2]])
+            #         fused_model.add_module(names[i], fused_conv2d_batchnorm2d_relu_layer)
+            #         i += 3
+            #     elif i+1 <  length and isinstance(self[names[i+1]], (BatchNorm2d)):
+            #         fused_conv2d_batchnorm2d_layer = fuse_conv2d_batchnorm2d(self[names[i]], self[names[i+1]])
+            #         fused_model.add_module(names[i], fused_conv2d_batchnorm2d_layer)
+            #         i += 2
+            #     elif i+1 <  length and isinstance(self[names[i+1]], ReLU):
+            #         fused_conv2d_relu_layer = fuse_conv2d_relu(self[names[i]], self[names[i+1]])
+            #         fused_model.add_module(names[i], fused_conv2d_relu_layer)
+            #         i += 2
+            #     else: 
+            #         fused_model.add_module(*names_layers[i])
+            #         i += 1
+            # elif isinstance(self[names[i]], Linear):
+            #     if i+1 <  length and isinstance(self[names[i+1]], ReLU):
+            #         fused_linear_relu_layer = fuse_linear_relu(self[names[i]], self[names[i+1]])
+            #         fused_model.add_module(names[i], fused_linear_relu_layer)
+            #         i += 2                
+            #     else: 
+            #         fused_model.add_module(*names_layers[i])
+            #         i += 1
+            # else:
+            #     fused_model.add_module(*names_layers[i])
+            #     i += 1
+
+        return fused_model
+
         
 
     def init_compress(
@@ -279,13 +427,10 @@ class Sequential(nn.Sequential):
 
                 if not isinstance(config["prune_channel"]["sparsity"], (float, int)) or config["prune_channel"]["sparsity"] != 0:
 
-
                     def prune_channel_layer(layer):
                         layer.is_pruned_channel = True
 
                     model.apply(prune_channel_layer)
-                    model.is_pruned_channel = True
-
                     model.init_prune_channel()
 
             elif compression_type == "quantize":
@@ -295,13 +440,10 @@ class Sequential(nn.Sequential):
                     # layer.quantize_type = config["quantize"]["type"]
 
                 if config["quantize"]["scheme"] != QuantizationScheme.NONE:
-                    
                     if config["quantize"]["scheme"] == QuantizationScheme.STATIC and calibration_data is None:
                         raise ValueError(f"Pass a calibration data when doing static quantization!")
 
                     model.apply(quantize_layer)
-                    model.is_quantized = True
-
                     model.init_quantize(calibration_data)
             else:
                 raise NotImplementedError(f"Compression of type {compression_type} not implemented!")
@@ -318,7 +460,8 @@ class Sequential(nn.Sequential):
         keep_prev_channel_index = None
 
         # Prune all layers except last
-        for name, layer in list(self.layers.items())[:-1]:
+        # for name, layer in list(self.layers.items())[:-1]:
+        for name, layer in list(self.names_layers())[:-1]:
 
             keep_prev_channel_index = layer.init_prune_channel(
                 sparsity[name], keep_prev_channel_index, input_shape,
@@ -327,7 +470,7 @@ class Sequential(nn.Sequential):
             _, input_shape = layer.get_output_tensor_shape(input_shape)
 
         # Prune last layer
-        name, layer = list(self.layers.items())[-1]
+        name, layer = list(self.names_layers())[-1]
         keep_prev_channel_index = layer.init_prune_channel(
             sparsity[name], keep_prev_channel_index, input_shape,
             is_output_layer=True, metric=metric
@@ -348,7 +491,7 @@ class Sequential(nn.Sequential):
                         continue
                     layer_sparsity = sparsity
                     sparsity = dict()
-                    for name in self.layers.keys():
+                    for name in self.names():
                         sparsity[name] = layer_sparsity
 
                 elif isinstance(sparsity, dict):
@@ -356,16 +499,16 @@ class Sequential(nn.Sequential):
                         if not isinstance(layer_sparsity, (float, int)):
                             return False
                             # raise TypeError(f"layer sparsity has to be of type of float or int not {type(layer_sparsity)} for layer {name}!")
-                        if name not in self.layers.keys():
+                        if name not in self.names():
                             return False
                             # raise NameError(f"Found unknown layer name {name}")
-                        if not self.layers[name].is_prunable():
+                        if not self[name].is_prunable():
                             return False
                             # raise ValueError(f"layer of name {name} is not prunable")
-                        if not isinstance(layer_sparsity, float) and layer_sparsity not in self.layers[name].get_prune_channel_possible_hypermeters():
+                        if not isinstance(layer_sparsity, float) and layer_sparsity not in self[name].get_prune_channel_possible_hypermeters():
                             return False
                             # raise ValueError(f"Recieved a layer_sparsity of {layer_sparsity} ")
-                    for name in self.layers.keys():
+                    for name in self.names():
                         # if name not in sparsity and self.layers[name].is_prunable():
                         if name not in sparsity:
                             sparsity[name] = 0
@@ -398,7 +541,7 @@ class Sequential(nn.Sequential):
     def get_prune_channel_possible_hypermeters(self):
         prune_possible_hypermeters = dict()
 
-        for name, layer in self.layers.items():
+        for name, layer in self.names_layers():
             layer_prune_possible_hypermeters = layer.get_prune_channel_possible_hypermeters()
             if layer_prune_possible_hypermeters is not None:
                 prune_possible_hypermeters[name] = layer_prune_possible_hypermeters
@@ -480,9 +623,17 @@ class Sequential(nn.Sequential):
         if scheme == QuantizationScheme.NONE:
             return
 
-        for layer in self.layers.values():
-            layer.init_quantize(bitwidth, scheme, granularity)
-
+        if scheme != QuantizationScheme.STATIC:
+            for layer in self.layers():
+                layer.init_quantize(bitwidth, scheme, granularity)
+            return
+        
+        setattr(self, "input_quantize", Quantize(
+            self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
+        ))
+        previous_output_quantize = self.input_quantize
+        for layer in self.layers():
+            previous_output_quantize = layer.init_quantize(bitwidth, scheme, granularity, previous_output_quantize)
         self.train()
         if scheme == QuantizationScheme.STATIC:
             self(calibration_data)
@@ -490,7 +641,7 @@ class Sequential(nn.Sequential):
 
     def get_size_in_bits(self):
         size = 0
-        for layer in self.layers.values():
+        for layer in self.layers():
             size += layer.get_size_in_bits()
         return size
     
@@ -518,7 +669,7 @@ class Sequential(nn.Sequential):
         output_shape = input_shape
         
         # Track maximum tensor sizes at even/odd layers
-        for i, layer in enumerate(self.layers.values()):
+        for i, layer in enumerate(self.layers()):
             max_layer_shape, output_shape = layer.get_output_tensor_shape(input_shape)
             if (i % 2 == 0):
                 max_output_even_size = max(max_output_even_size, input_shape.numel(), max_layer_shape.numel())
@@ -527,7 +678,7 @@ class Sequential(nn.Sequential):
         
             input_shape = output_shape
             # print(max_layer_shape, output_shape, i, layer.__class__.__name__)
-        if len(self.layers) % 2 == 0:
+        if len(self) % 2 == 0:
             max_output_even_size = max(max_output_even_size, output_shape.numel())
         else:
             max_output_odd_size = max(max_output_odd_size, output_shape.numel())
@@ -575,8 +726,8 @@ class Sequential(nn.Sequential):
             workspace_def = f"float workspace[MAX_OUTPUT_EVEN_SIZE + MAX_OUTPUT_ODD_SIZE];\n\n"
         else:
             workspace_header = (
-                f"#define MAX_OUTPUT_EVEN_SIZE {max_output_even_size}\n"
-                f"#define MAX_OUTPUT_ODD_SIZE {max_output_odd_size}\n"
+                f"#define MAX_OUTPUT_EVEN_SIZE {math.ceil(max_output_even_size/(8//self.input_quantize.bitwidth))}\n"
+                f"#define MAX_OUTPUT_ODD_SIZE {math.ceil(max_output_odd_size/(8//self.input_quantize.bitwidth))}\n"
                 f"extern int8_t workspace[MAX_OUTPUT_EVEN_SIZE + MAX_OUTPUT_ODD_SIZE];\n\n"
             )
             workspace_def = f"int8_t workspace[MAX_OUTPUT_EVEN_SIZE + MAX_OUTPUT_ODD_SIZE];\n\n"
@@ -586,7 +737,7 @@ class Sequential(nn.Sequential):
 
         # Generate layer declarations
         layers_header = (
-            f"#define LAYERS_LEN {len(self.layers)}\n"
+            f"#define LAYERS_LEN {len(self)}\n"
             f"extern Layer* layers[LAYERS_LEN];\n\n"
             f"extern Sequential {var_name};\n\n"
         )
@@ -595,7 +746,7 @@ class Sequential(nn.Sequential):
             f"\nLayer* layers[LAYERS_LEN] = {{\n"
         )
         
-        for layer_name, layer in self.layers.items():
+        for layer_name, layer in self.names_layers():
 
             layers_def += f"    &{layer_name},\n"
 
@@ -624,43 +775,39 @@ class Sequential(nn.Sequential):
 
     @torch.no_grad
     def test(self, device:str = "cpu", include_dir="./", src_dir="./", var_name="model"):
-        # self.cpu()
-        # if hasattr(self, "quantize_type") and (getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_TENSOR
-        #                                            or getattr(self, "quantize_type") == STATIC_QUANTIZATION_PER_CHANNEL):
-        #     return self(quantize_per_tensor_assy(
-        #             self.test_input.clone(), self.input_scale, self.input_zero_point, self.quantize_bitwidth))
-        
-        # Generate test input data
-        # if "_dmc" in self.__dict__ and "quantization" in self.__dict__["_dmc"] and self.__dict__["_dmc"]["quantization"]["type"] == STATIC_QUANTIZATION_PER_TENSOR:
-        #     test_input_def = f"\nconst uint8_t test_input[] = {{\n"
-        #     for line in torch.split(quantize_per_tensor_assy(
-        #             self.test_input, 
-        #             self.__dict__["_dmc"]["quantization"]["input_scale"],
-        #             self.__dict__["_dmc"]["quantization"]["input_zero_point"],
-        #             self.__dict__["_dmc"]["quantization"]["bitwidth"],
-        #         ).flatten(), 8):
-        #         test_input_def += "    " + ", ".join(
-        #             [f"0x{b:02X}" for val in line for b in int8_to_bytes(val)]
-        #         ) + ",\n"
-        #     test_input_def += "};\n"
-        # else:
 
         import random
         index = random.randint(0, self.test_input.size(0)-1)
-        
         # index = 0
-        test_input_def = f"\nconst float test_input[] = {{\n"
-        for line in torch.split(self.test_input[index].flatten(), 8):
-            test_input_def += "    " + ", ".join(
-                [f"{val:.4f}" for val in line]
-            ) + ",\n"
-        test_input_def += "};\n"
+
+        test_input = self.test_input[index]
+        test_output = self(test_input.unsqueeze(dim=0).clone().to(device))
+
+        if self.is_quantized and self.__dict__["_dmc"]["compression_config"]["quantize"]["scheme"] == QuantizationScheme.STATIC:
+            _, test_input_def = convert_tensor_to_bytes_var(self.input_quantize.apply(test_input), "test_input", self.input_quantize.bitwidth)
+            # test_input_def = f"\nconst int8_t test_input[] = {{\n"
+            # for line in torch.split(self.input_quantize.apply(test_input).flatten(), 28):
+            #     test_input_def += "    " + ", ".join(
+            #         [f"{val:4d}" for val in line]
+            #     ) + ",\n"
+            # test_input_def += "};\n"
+
+            test_output = self.output_quantize.apply(test_output)
+
+        else:
+
+            test_input_def = f"\nconst float test_input[] = {{\n"
+            for line in torch.split(test_input.flatten(), 28):
+                test_input_def += "    " + ", ".join(
+                    [f"{val:.4f}" for val in line]
+                ) + ",\n"
+            test_input_def += "};\n"
 
 
         with open(path.join(include_dir, f"{var_name}_test_input.h"), "w") as file:
             file.write(test_input_def)
 
-        return self(self.test_input[index].unsqueeze(dim=0).clone().to(device))
+        return test_output
 
 
 
@@ -718,7 +865,7 @@ class Sequential(nn.Sequential):
             Dictionary mapping layer names to weight histograms
         """
         weight_dist = dict()
-        for name, layer in self.layers.items():
+        for name, layer in self.names_layers():
             if hasattr(layer, "weight"): 
                 weight_dist[name] = torch.histogram(layer.weight.cpu(), bins=bins)
             else: 
@@ -745,11 +892,11 @@ class Sequential(nn.Sequential):
         """
         history = dict()
         default_config = dict()
-        for name in self.layers.keys():
+        for name in self.names():
             default_config[name] = 0.2
 
         # Test each layer's sensitivity to pruning
-        for name in self.layers.keys():
+        for name in self.names():
             history[name] = []
             for sparsity in tqdm(sparsities[name], desc=f"Pruning {name}"):
                 config = default_config.copy()
@@ -818,7 +965,7 @@ class Sequential(nn.Sequential):
         setattr(self, "quantize_bitwidth", bitwidth)
         setattr(self, "quantize_type", DYNAMIC_QUANTIZATION_PER_TENSOR)
 
-        for layer in self.layers.values():
+        for layer in self.layers():
             # if hasattr(layer, "dynamic_quantize_per_tensor"):
                 layer.dynamic_quantize_per_tensor(bitwidth)
 

@@ -37,6 +37,7 @@ class Quantize:
         avg_exp: float = 0.01,
         base: Optional[Iterable["Quantize"]] = None, 
         base_accumulator: Optional[Callable[[torch.Tensor, int, Iterable["Quantize"]], torch.Tensor]] = None,
+        
         prune_channel: Optional["Prune_Channel"] = None
     ) -> None:
 
@@ -47,14 +48,14 @@ class Quantize:
         self.scale_type = scale_type
         self.avg_exp = avg_exp
         self.rmin = None
-        self.rmax = None 
+        self.rmax = None
 
         self.base = base
 
         if base is not None:
             if base_accumulator is None:
                 if scale_type == QuantizationScaleType.ASSYMMETRIC:
-                    self.base_accumulator: Callable[[Iterable["Quantize"]], Tuple[torch.Tensor, torch.Tensor]] = lambda base : prod([b.scale for b in base]), sum([b.zero_point for b in base])
+                    self.base_accumulator: Callable[[Iterable["Quantize"]], Tuple[torch.Tensor, torch.Tensor]] = lambda base : (prod([b.scale for b in base]), sum([b.zero_point for b in base]))
                 else:
                     self.base_accumulator: Callable[[Iterable["Quantize"]], torch.Tensor] = lambda base : prod([b.scale for b in base])
             else:
@@ -80,9 +81,9 @@ class Quantize:
     def zero_point(self):
         assert self.scale_type == QuantizationScaleType.ASSYMMETRIC, f"scale type should be {QuantizationScaleType.ASSYMMETRIC}"
         if self.base is None:
-            return get_quantize_scale_zero_point_assy(self.rmax, self.rmin, self.bitwidth)[1]
+            return get_quantize_scale_zero_point_assy(self.rmax, self.rmin, self.bitwidth)[1].to(torch.int8)
         else:
-            return self.base_accumulator(self.base)[1]
+            return self.base_accumulator(self.base)[1].to(torch.int8)
 
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:

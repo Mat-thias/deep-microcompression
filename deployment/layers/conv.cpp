@@ -19,83 +19,111 @@
 #define PADDING_SAME  1
 
 
-void pad_input(float* input, Padding_t padding, 
-                const uint32_t input_channel_size, const uint32_t input_row_size, const uint32_t input_col_size, 
-                const uint32_t padded_row_size, const uint32_t padded_col_size) {
-    if (padding.is_padded()) {
-        for (int32_t n = input_channel_size-1; n > -1; n--) {
-            for (int32_t m = padded_row_size-1; m > -1; m--) {
-                for (int32_t l = padded_col_size-1; l > -1; l--) {
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME == NONE
 
-                    // int32_t pad_index = ((n * padded_row_size * padded_col_size) + 
-                    //         (m * padded_col_size) + 
-                    //         l);
-                    // int32_t in_index = ((n * input_row_size * input_col_size) + 
-                    //         ((m-padding.padding_top) * input_col_size) + 
-                    //         (l-padding.padding_left));
 
-                    if (m < padding.padding_top || m >= padded_row_size - padding.padding_bottom || 
-                        l < padding.padding_left || l >= padded_col_size - padding.padding_right){
-                        
-                            input[((n * padded_row_size * padded_col_size) + 
-                            (m * padded_col_size) + 
-                            l)] = 0;
+Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
+               uint32_t output_channel_size, uint32_t kernel_row_size, uint32_t kernel_col_size,
+               uint32_t stride_row, uint32_t stride_col, Padding_t padding, uint32_t groups,
+               const float* weight, const float* bias) {
+    
+    // Store layer parameters
+    this->input_channel_size = input_channel_size;
+    this->input_row_size = input_row_size;
+    this->input_col_size = input_col_size;
+    this->output_channel_size = output_channel_size;
+    this->kernel_row_size = kernel_row_size;
+    this->kernel_col_size = kernel_col_size;
+    
+    this->stride_row = stride_row;
+    this->stride_col = stride_col;
+    this->padding = padding;
+    this->groups = groups;
+    
+    this->weight = weight;
+    this->bias = bias;
+
+    // Compute output dimensions
+    this->output_row_size = ((this->input_row_size + this->padding.padding_top + this->padding.padding_bottom - this->kernel_row_size) / this->stride_row) + 1;
+    this->output_col_size = ((this->input_col_size + this->padding.padding_left + this->padding.padding_right - this->kernel_col_size) / this->stride_col) + 1;
+}
+
+/**
+ * @brief Forward pass for floating-point Conv2d
+ * @param input Input tensor (float)
+ * @param output Output tensor (float)
+ */
+void Conv2d::forward(float* input, float* output) {
+    float output_temp;
+
+    uint32_t input_channel_per_group = this->input_channel_size / this->groups;
+    uint32_t output_channel_per_group = this->output_channel_size / this->groups;
+
+    uint32_t n, k;
+
+    uint32_t padded_row_size = this->input_row_size + this->padding.padding_top + this->padding.padding_bottom;
+    uint32_t padded_col_size = this->input_col_size + this->padding.padding_left + this->padding.padding_right;
+
+    pad_input(input, this->padding, input_channel_size, input_row_size, input_col_size, padded_row_size, padded_col_size);
+
+    for (uint32_t g = 0; g < this->groups; g++){
+        // Output channel loop
+        for (uint32_t c_out = 0; c_out < output_channel_per_group; c_out++) {
+            n = g * output_channel_per_group + c_out;
+            // Output spatial dimensions loops
+            for (uint32_t m = 0; m < this->output_row_size; m++) {
+                for (uint32_t l = 0; l < this->output_col_size; l++) {
+                    output_temp = this->bias ? this->bias[n] : 0;
+
+                    for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
+                        k = g * input_channel_per_group + c_in;
+                        for (uint32_t j = 0; j < this->kernel_row_size; j++) {
+                            for (uint32_t i = 0; i < this->kernel_col_size; i++) {
+
+                                // Convolution operation
+                                output_temp += 
+                                    input[(k * padded_row_size * padded_col_size) +
+                                        ((j + m * this->stride_row) * padded_col_size) + 
+                                        (i + l * this->stride_col)] *
+                                    this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                                (c_in * this->kernel_row_size * kernel_col_size) + 
+                                                (j * this->kernel_col_size) + 
+                                                i];
+                                // output_temp += get_value(
+                                //     input,
+                                //     (k * padded_row_size * padded_col_size) +
+                                //     ((j + m * this->stride_row) * padded_col_size) + 
+                                //     (i + l * this->stride_col)
+                                // ) *
+                                // get_value(
+                                //     this->weight, 
+                                //     (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //     (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //     (j * this->kernel_col_size) + i
+                                // );
+                            }
                         }
-                    else {
-                            input[((n * padded_row_size * padded_col_size) + 
-                            (m * padded_col_size) + 
-                            l)] =
-                            input[((n * input_row_size * input_col_size) + 
-                            ((m-padding.padding_top) * input_col_size) + 
-                            (l-padding.padding_left))];
                     }
+                    output[(n * this->output_row_size * this->output_col_size) + 
+                            (m * this->output_col_size) + 
+                            l] = output_temp;
+                    // set_value(output, 
+                    //     (n * this->output_row_size * this->output_col_size) + 
+                    //     (m * this->output_col_size) + l,
+                    //     output_temp
+                    // );
                 }
             }
         }
-
     }
 }
 
 
-void pad_input(int8_t* input, int8_t zero_point, Padding_t padding, 
-                const uint32_t input_channel_size, const uint32_t input_row_size, const uint32_t input_col_size, 
-                const uint32_t padded_row_size, const uint32_t padded_col_size) {
-    if (padding.is_padded()) {
-        for (int32_t n = input_channel_size-1; n > -1; n--) {
-            for (int32_t m = padded_row_size-1; m > -1; m--) {
-                for (int32_t l = padded_col_size-1; l > -1; l--) {
-
-                    // int32_t pad_index = ((n * padded_row_size * padded_col_size) + 
-                    //         (m * padded_col_size) + 
-                    //         l);
-                    // int32_t in_index = ((n * input_row_size * input_col_size) + 
-                    //         ((m-padding.padding_top) * input_col_size) + 
-                    //         (l-padding.padding_left));
-
-                    if (m < padding.padding_top || m >= padded_row_size - padding.padding_bottom || 
-                        l < padding.padding_left || l >= padded_col_size - padding.padding_right){
-                        
-                            input[((n * padded_row_size * padded_col_size) + 
-                            (m * padded_col_size) + 
-                            l)] = zero_point;
-                        }
-                    else {
-                            input[((n * padded_row_size * padded_col_size) + 
-                            (m * padded_col_size) + 
-                            l)] =
-                            input[((n * input_row_size * input_col_size) + 
-                            ((m-padding.padding_top) * input_col_size) + 
-                            (l-padding.padding_left))];
-                    }
-                }
-            }
-        }
-
-    }
-}
 
 
-#ifdef DYNAMIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
+#elif QUANTIZATION_SCHEME == DYNAMIC // QUANTIZATION_SCHEME
+#if QUANTIZATION_GRANULARITY == PER_TENSOR
+
 
 /**
  * @brief Constructor for dynamically quantized Conv2d layer
@@ -140,7 +168,8 @@ Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t in
  * @param output Output tensor (float)
  */
 void Conv2d::forward(float* input, float* output) {
-    uint32_t output_index;
+    // uint32_t output_index;
+    float output_temp;
 
     uint32_t input_channel_per_group = this->input_channel_size / this->groups;
     uint32_t output_channel_per_group = this->output_channel_size / this->groups;
@@ -160,41 +189,61 @@ void Conv2d::forward(float* input, float* output) {
             for (uint32_t m = 0; m < this->output_row_size; m++) {
                 for (uint32_t l = 0; l < this->output_col_size; l++) {
                     
-                    // Calculate output index
-                    output_index = (n * this->output_row_size * this->output_col_size) + 
-                                (m * this->output_col_size) + 
-                                l;
-                    output[output_index] = 0;
+                    output_temp = 0;
                     for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
                         k = g * input_channel_per_group + c_in;
                         for (uint32_t j = 0; j < this->kernel_row_size; j++) {
                             for (uint32_t i = 0; i < this->kernel_col_size; i++) {
 
-                                // Convolution operation
-                                output[output_index] += 
-                                    input[(k * padded_row_size * padded_col_size) +
+                                // // Convolution operation
+                                // output_temp += 
+                                //     input[(k * padded_row_size * padded_col_size) +
+                                //         ((j + m * this->stride_row) * padded_col_size) + 
+                                //         (i + l * this->stride_col)] *
+                                //     this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //                 (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //                 (j * this->kernel_col_size) + 
+                                //                 i];
+                                // int8_t weight = get_packed_value(this->weight, 
+                                //     (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //     (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //     (j * this->kernel_col_size) + i
+                                // );
+                                output_temp += input[(k * padded_row_size * padded_col_size) +
                                         ((j + m * this->stride_row) * padded_col_size) + 
                                         (i + l * this->stride_col)] *
-                                    this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                (j * this->kernel_col_size) + 
-                                                i];
+                                get_packed_value(this->weight, 
+                                    (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                    (c_in * this->kernel_row_size * kernel_col_size) + 
+                                    (j * this->kernel_col_size) + i
+                                );
                             }
                         }
                     }
-                    output[output_index] *= this->weight_scale;    
-                    if (this->bias) {
-                        output[output_index] += this->bias[n];
-                    }
+                    output[(n * this->output_row_size * this->output_col_size) + 
+                        (m * this->output_col_size) + 
+                        l] = this->bias ? 
+                        output_temp * this->weight_scale + this->bias[n]:
+                        output_temp * this->weight_scale;  
+                    // set_value(output, 
+                    //     (n * this->output_row_size * this->output_col_size) + 
+                    //     (m * this->output_col_size) + l,
+                    //     this->bias ? 
+                    //     output_temp * this->weight_scale + this->bias[n]:
+                    //     output_temp * this->weight_scale
+                    // );
                 }
             }
         }
     }
 }
 
+#endif // QUANTIZATION_GRANULARITY
 
-#elif defined(STATIC_QUANTIZATION_PER_TENSOR)
 
+#elif QUANTIZATION_SCHEME == STATIC // QUANTIZATION_SCHEME
+
+#if QUANTIZATION_GRANULARITY == PER_TENSOR
 
 Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
                uint32_t output_channel_size, uint32_t kernel_row_size, uint32_t kernel_col_size,
@@ -257,58 +306,51 @@ void Conv2d::forward(int8_t* input, int8_t* output) {
                 for (uint32_t l = 0; l < this->output_col_size; l++) {
                     
                     // Calculate output index
-                    output_index = (n * this->output_row_size * this->output_col_size) + 
-                                (m * this->output_col_size) + 
-                                l;
-                    if (this->bias) {
-                        output_temp = this->bias[n];
-                    }
-                    else {
-                        output_temp = 0;
-                    }
+                    // output_index = (n * this->output_row_size * this->output_col_size) + 
+                    //             (m * this->output_col_size) + 
+                    //             l;
+                    output_temp = this->bias ? this->bias[n] : 0;
+                    // if (this->bias) {
+                    //     output_temp = this->bias[n];
+                    // }
+                    // else {
+                    //     output_temp = 0;
+                    // }
 
                     for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
                         k = g * input_channel_per_group + c_in;
                         for (uint32_t j = 0; j < this->kernel_row_size; j++) {
                             for (uint32_t i = 0; i < this->kernel_col_size; i++) {
-                                int32_t in = ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-                                                   ((j + m * this->stride_row) * this->input_col_size) + 
-                                                   (i + l * this->stride_col)] - this->input_zero_point);
-                                int32_t we = (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                         (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                         (j * this->kernel_col_size) + 
-                                                         i];
-
-                                int32_t te = ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-                                                   ((j + m * this->stride_row) * this->input_col_size) + 
-                                                   (i + l * this->stride_col)] - this->input_zero_point) *
-                                    (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                         (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                         (j * this->kernel_col_size) + 
-                                                         i];
-
-
-
-
                                 // Convolution operation
-                                output_temp += 
-                                    ((int32_t)input[(k * padded_row_size * padded_col_size) +
-                                                   ((j + m * this->stride_row) * padded_col_size) + 
-                                                   (i + l * this->stride_col)] - this->input_zero_point) *
-                                    (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                         (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                         (j * this->kernel_col_size) + 
-                                                         i];
+                                // output_temp += 
+                                //     ((int32_t)input[(k * padded_row_size * padded_col_size) +
+                                //                    ((j + m * this->stride_row) * padded_col_size) + 
+                                //                    (i + l * this->stride_col)] - this->input_zero_point) *
+                                //     (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                //                          (c_in * this->kernel_row_size * kernel_col_size) + 
+                                //                          (j * this->kernel_col_size) + 
+                                //                          i];
 
-                                    //                                                      output[output_index] += 
-                                    // input[(k * padded_row_size * padded_col_size) +
-                                    //     ((j + m * this->stride_row) * padded_col_size) + 
-                                    //     (i + l * this->stride_col)] *
-                                    // this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                    //             (c_in * this->kernel_row_size * kernel_col_size) + 
-                                    //             (j * this->kernel_col_size) + 
-                                    //             i] * this->weight_scale;
-                            
+                                int8_t inp = get_packed_value(input, 
+                                    (k * padded_row_size * padded_col_size) +
+                                    ((j + m * this->stride_row) * padded_col_size) + 
+                                    (i + l * this->stride_col));
+
+                                int8_t wei = get_packed_value(this->weight, 
+                                    (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                    (c_in * this->kernel_row_size * kernel_col_size) + 
+                                    (j * this->kernel_col_size) + i
+                                );
+
+                                output_temp += ((int32_t)get_packed_value(input, 
+                                    (k * padded_row_size * padded_col_size) +
+                                    ((j + m * this->stride_row) * padded_col_size) + 
+                                    (i + l * this->stride_col))  - this->input_zero_point) *
+                                get_packed_value(this->weight, 
+                                    (n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
+                                    (c_in * this->kernel_row_size * kernel_col_size) + 
+                                    (j * this->kernel_col_size) + i
+                                );
                             }
                         }
                     }
@@ -316,624 +358,24 @@ void Conv2d::forward(int8_t* input, int8_t* output) {
                     output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
                     output_temp += this->output_zero_point;
                     
+                    set_packed_value(output, 
+                        (n * this->output_row_size * this->output_col_size) + 
+                        (m * this->output_col_size) + 
+                        l, 
+                        output_temp
+                    );
                     // Clamp to int8_t range
-                    output[output_index] = output_temp < -128 ? (int8_t)-128 : 
-                                         (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
+                    // output[(n * this->output_row_size * this->output_col_size) + 
+                    //     (m * this->output_col_size) + 
+                    //     l] = output_temp < -128 ? (int8_t)-128 : 
+                    //             (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
 
                 }
             }
         }
     }
 }
-//     switch (this->padding) {
-//     case PADDING_VALID:
-
-//         for (uint32_t g = 0; g < this->groups; g++){
-//             // Output channel loop
-//             for (uint32_t c_out = 0; c_out < output_channel_per_group; c_out++) {
-//                 n = g * output_channel_per_group + c_out;
-//                 // Output spatial dimensions loops
-//                 for (uint32_t m = 0; m < this->output_row_size; m++) {
-//                     for (uint32_t l = 0; l < this->output_col_size; l++) {
-                        
-//                         // Calculate output index
-//                         output_index = (n * this->output_row_size * this->output_col_size) + 
-//                                     (m * this->output_col_size) + 
-//                                     l;
-//                         output_temp = 0;
-
-//                         for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
-//                             k = g * input_channel_per_group + c_in;
-//                             for (uint32_t j = 0; j < kernel_row_size; j++) {
-//                                 for (uint32_t i = 0; i < kernel_col_size; i++) {
-// #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-//                                 // 8-bit quantization path
-//                                 output_temp += 
-//                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-//                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-//                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-//                                     (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                          (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                          (j * this->kernel_col_size) + 
-//                                                          i];
-// #elif QUANTIZATION_BITWIDTH == 4
-//                                 // 4-bit quantization path
-//                                 output_temp += 
-//                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-//                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-//                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-//                                     (int32_t)(((int8_t)(((this->weight[((n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                    (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                    (j * this->kernel_col_size) + 
-//                                                    i) >> 1] >> (
-//                                                    (((n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                    (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                    (j * this->kernel_col_size) + 
-//                                                    i) & 1) << 2)) & 0x0F) << 4)) >> 4);
-// #endif // QUANTIZATION_BITWIDTH
-//                                 }
-//                             }
-//                         }
-//                     // Apply bias, scaling and clamping
-//                     output_temp += this->bias[n];
-//                     output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
-//                     output_temp += this->output_zero_point;
-                    
-//                     // Clamp to int8_t range
-//                     output[output_index] = output_temp < -128 ? (int8_t)-128 : 
-//                                          (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
-//                     }
-//                 }
-//             }
-//         }
-        
-//         // Output channel loop
-//         for (uint32_t n = 0; n < this->output_channel_size; n++) {
-//             // Output spatial dimensions loops
-//             for (uint32_t m = 0; m < this->output_row_size; m++) {
-//                 for (uint32_t l = 0; l < this->output_col_size; l++) {
-                    
-//                     // Calculate output index
-//                     output_index = (n * this->output_row_size * this->output_col_size) + 
-//                                   (m * this->output_col_size) + 
-//                                   l;
-//                     output_temp = 0;
-
-//                     // Input channel and kernel loops
-//                     for (uint32_t k = 0; k < input_channel_size; k++) {
-//                         for (uint32_t j = 0; j < kernel_row_size; j++) {
-//                             for (uint32_t i = 0; i < kernel_col_size; i++) {
-                                
-// #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-//                                 // 8-bit quantization path
-//                                 output_temp += 
-//                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-//                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-//                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-//                                     (int32_t)this->weight[(n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-//                                                          (k * this->kernel_row_size * kernel_col_size) + 
-//                                                          (j * this->kernel_col_size) + 
-//                                                          i];
-
-// #elif QUANTIZATION_BITWIDTH == 4
-//                                 // 4-bit quantization path
-//                                 output_temp += 
-//                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-//                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-//                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-//                                     (int32_t)(((int8_t)(((this->weight[((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-//                                                    (k * this->kernel_row_size * kernel_col_size) + 
-//                                                    (j * this->kernel_col_size) + 
-//                                                    i) >> 1] >> (
-//                                                    (((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-//                                                    (k * this->kernel_row_size * kernel_col_size) + 
-//                                                    (j * this->kernel_col_size) + 
-//                                                    i) & 1) << 2)) & 0x0F) << 4)) >> 4);
-// #endif // QUANTIZATION_BITWIDTH
-//                             }
-//                         }
-//                     }
-                    
-//                     // Apply bias, scaling and clamping
-//                     output_temp += this->bias[n];
-//                     output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
-//                     output_temp += this->output_zero_point;
-                    
-//                     // Clamp to int8_t range
-//                     output[output_index] = output_temp < -128 ? (int8_t)-128 : 
-//                                          (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
-//                 }
-//             }
-//         }
-    //     break;
-
-    // case PADDING_SAME:
-    //     // TODO: Implement same padding
-    //     break;
-    // }
-// }
+#endif // QUANTIZATION_GRANULARITY
 
 
-#else   
-
-Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
-               uint32_t output_channel_size, uint32_t kernel_row_size, uint32_t kernel_col_size,
-               uint32_t stride_row, uint32_t stride_col, Padding_t padding, uint32_t groups,
-               const float* weight, const float* bias) {
-    
-    // Store layer parameters
-    this->input_channel_size = input_channel_size;
-    this->input_row_size = input_row_size;
-    this->input_col_size = input_col_size;
-    this->output_channel_size = output_channel_size;
-    this->kernel_row_size = kernel_row_size;
-    this->kernel_col_size = kernel_col_size;
-    
-    this->stride_row = stride_row;
-    this->stride_col = stride_col;
-    this->padding = padding;
-    this->groups = groups;
-    
-    this->weight = weight;
-    this->bias = bias;
-
-    // Compute output dimensions
-    this->output_row_size = ((this->input_row_size + this->padding.padding_top + this->padding.padding_bottom - this->kernel_row_size) / this->stride_row) + 1;
-    this->output_col_size = ((this->input_col_size + this->padding.padding_left + this->padding.padding_right - this->kernel_col_size) / this->stride_col) + 1;
-}
-
-/**
- * @brief Forward pass for floating-point Conv2d
- * @param input Input tensor (float)
- * @param output Output tensor (float)
- */
-void Conv2d::forward(float* input, float* output) {
-    uint32_t output_index;
-
-    uint32_t input_channel_per_group = this->input_channel_size / this->groups;
-    uint32_t output_channel_per_group = this->output_channel_size / this->groups;
-
-    uint32_t n, k;
-
-    uint32_t padded_row_size = this->input_row_size + this->padding.padding_top + this->padding.padding_bottom;
-    uint32_t padded_col_size = this->input_col_size + this->padding.padding_left + this->padding.padding_right;
-
-    pad_input(input, this->padding, input_channel_size, input_row_size, input_col_size, padded_row_size, padded_col_size);
-    // if (this->padding.is_padded()) {
-    //     for (int32_t n = this->input_channel_size-1; n > -1; n--) {
-    //         for (int32_t m = padded_row_size-1; m > -1; m--) {
-    //             for (int32_t l = padded_col_size-1; l > -1; l--) {
-
-    //                 int32_t pad_index = ((n * padded_row_size * padded_col_size) + 
-    //                         (m * padded_col_size) + 
-    //                         l);
-    //                 int32_t in_index = ((n * this->input_row_size * this->input_col_size) + 
-    //                         ((m-this->padding.padding_top) * this->input_col_size) + 
-    //                         (l-this->padding.padding_left));
-
-    //                 if (m < this->padding.padding_top || m >= padded_row_size - this->padding.padding_bottom || 
-    //                     l < this->padding.padding_left || l >= padded_col_size - this->padding.padding_right){
-                        
-    //                         input[((n * padded_row_size * padded_col_size) + 
-    //                         (m * padded_col_size) + 
-    //                         l)] = 0;
-    //                     }
-    //                 else {
-    //                         input[((n * padded_row_size * padded_col_size) + 
-    //                         (m * padded_col_size) + 
-    //                         l)] =
-    //                         input[((n * this->input_row_size * this->input_col_size) + 
-    //                         ((m-this->padding.padding_top) * this->input_col_size) + 
-    //                         (l-this->padding.padding_left))];
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-
-    for (uint32_t g = 0; g < this->groups; g++){
-        // Output channel loop
-        for (uint32_t c_out = 0; c_out < output_channel_per_group; c_out++) {
-            n = g * output_channel_per_group + c_out;
-            // Output spatial dimensions loops
-            for (uint32_t m = 0; m < this->output_row_size; m++) {
-                for (uint32_t l = 0; l < this->output_col_size; l++) {
-                    
-                    // Calculate output index
-                    output_index = (n * this->output_row_size * this->output_col_size) + 
-                                (m * this->output_col_size) + 
-                                l;
-                    if (this->bias) {
-                        output[output_index] = this->bias[n];
-                    }
-                    else {
-                        output[output_index] = 0;
-                    }
-
-                    for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
-                        k = g * input_channel_per_group + c_in;
-                        for (uint32_t j = 0; j < this->kernel_row_size; j++) {
-                            for (uint32_t i = 0; i < this->kernel_col_size; i++) {
-
-                                // Convolution operation
-                                output[output_index] += 
-                                    input[(k * padded_row_size * padded_col_size) +
-                                        ((j + m * this->stride_row) * padded_col_size) + 
-                                        (i + l * this->stride_col)] *
-                                    this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-                                                (c_in * this->kernel_row_size * kernel_col_size) + 
-                                                (j * this->kernel_col_size) + 
-                                                i];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-#endif // QUANTIZATION_TYPE
-
-// #if defined(QUANTIZATION_NONE) || (!defined(DYNAMIC_QUANTIZATION_PER_TENSOR) && !defined(DYNAMIC_QUANTIZATION_PER_CHANNEL) \
-//                                && !defined(STATIC_QUANTIZATION_PER_TENSOR) && !defined(STATIC_QUANTIZATION_PER_CHANNEL))
-
-// // ======================================================================
-// // Floating-Point Implementation
-// // ======================================================================
-
-
-// #elif defined(DYNAMIC_QUANTIZATION_PER_TENSOR)
-
-// // ======================================================================
-// // Dynamic Quantization Implementation (Per-Tensor)
-// // ======================================================================
-
-// /**
-//  * @brief Constructor for dynamically quantized Conv2d layer
-//  * @param weight_scale Scale factor for quantized weights
-//  */
-// Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
-//                uint32_t output_channel_size, uint32_t kernel_row_size, uint32_t kernel_col_size,
-//                uint32_t stride_row, uint32_t stride_col, uint32_t padding, uint32_t groups,
-//                const int8_t* weight, float weight_scale, const float* bias) {
-    
-//     // Store layer parameters
-//     this->input_channel_size = input_channel_size;
-//     this->input_row_size = input_row_size;
-//     this->input_col_size = input_col_size;
-//     this->output_channel_size = output_channel_size;
-//     this->kernel_row_size = kernel_row_size;
-//     this->kernel_col_size = kernel_col_size;
-    
-//     this->stride_row = stride_row;
-//     this->stride_col = stride_col;
-//     this->padding = padding;
-//     this->groups = groups;
-    
-//     this->weight = weight;
-//     this->weight_scale = weight_scale;
-//     this->bias = bias;
-
-//     // Compute output dimensions
-//     this->output_row_size = ((this->input_row_size - this->kernel_row_size) / this->stride_row) + 1;
-//     this->output_col_size = ((this->input_col_size - this->kernel_col_size) / this->stride_col) + 1;
-// }
-
-// /**
-//  * @brief Forward pass for dynamically quantized Conv2d
-//  * @param input Input tensor (float)
-//  * @param output Output tensor (float)
-//  */
-// void Conv2d::forward(float* input, float* output) {
-//     int output_index;
-
-//     uint32_t input_channel_per_group = this->input_channel_size / this->groups;
-//     uint32_t output_channel_per_group = this->output_channel_size / this->groups;
-
-//     uint32_t n, k;
-
-//     switch (this->padding) {
-//     case PADDING_VALID:
-//         for (uint32_t g = 0; g < this->groups; g++){
-//             // Output channel loop
-//             for (uint32_t c_out = 0; c_out < output_channel_per_group; c_out++) {
-//                 n = g * output_channel_per_group + c_out;
-//                 // Output spatial dimensions loops
-//                 for (uint32_t m = 0; m < this->output_row_size; m++) {
-//                     for (uint32_t l = 0; l < this->output_col_size; l++) {
-                        
-//                         // Calculate output index
-//                         output_index = (n * this->output_row_size * this->output_col_size) + 
-//                                     (m * this->output_col_size) + 
-//                                     l;
-//                         output[output_index] = 0;
-
-//                         for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
-//                             k = g * input_channel_per_group + c_in;
-//                             for (uint32_t j = 0; j < kernel_row_size; j++) {
-//                                 for (uint32_t i = 0; i < kernel_col_size; i++) {
-// #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-                                    
-//                                     // 8-bit quantization path
-//                                     output[output_index] += 
-//                                         input[(k * this->input_row_size * this->input_col_size) +
-//                                             ((j + m * this->stride_row) * this->input_col_size) + 
-//                                             (i + l * this->stride_col)] *
-//                                         this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                     (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                     (j * this->kernel_col_size) + 
-//                                                     i] * this->weight_scale;
-// #elif QUANTIZATION_BITWIDTH == 4
-//                                 // 4-bit quantization path
-//                                 output[output_index] += 
-//                                     input[(k * this->input_row_size * this->input_col_size) +
-//                                          ((j + m * this->stride_row) * this->input_col_size) + 
-//                                          (i + l * this->stride_col)] *
-//                                     (((int8_t)(((this->weight[((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-//                                          (k * this->kernel_row_size * kernel_col_size) + 
-//                                          (j * this->kernel_col_size) + 
-//                                          i) >> 1] >> (
-//                                          (((n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                          (k * c_in * kernel_col_size) + 
-//                                          (j * this->kernel_col_size) + 
-//                                          i) & 1) << 2)) & 0x0F) << 4)) >> 4) * this->weight_scale;
-// #endif // QUANTIZATION_BITWIDTH
-//                                 }
-//                             }
-//                         }
-//                         // Add bias
-//                         output[output_index] += this->bias[n];
-//                     }
-//                 }
-//             }
-//         }
-
-// //         // Output channel loop
-// //         for (uint32_t n = 0; n < this->output_channel_size; n++) {
-// //             // Output spatial dimensions loops
-// //             for (uint32_t m = 0; m < this->output_row_size; m++) {
-// //                 for (uint32_t l = 0; l < this->output_col_size; l++) {
-                    
-// //                     // Calculate output index
-// //                     output_index = (n * this->output_row_size * this->output_col_size) + 
-// //                                   (m * this->output_col_size) + 
-// //                                   l;
-// //                     output[output_index] = 0;
-
-// //                     // Input channel and kernel loops
-// //                     for (uint32_t k = 0; k < input_channel_size; k++) {
-// //                         for (uint32_t j = 0; j < kernel_row_size; j++) {
-// //                             for (uint32_t i = 0; i < kernel_col_size; i++) {
-                                
-// // #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-// //                                 // 8-bit quantization path
-// //                                 output[output_index] += 
-// //                                     input[(k * this->input_row_size * this->input_col_size) +
-// //                                          ((j + m * this->stride_row) * this->input_col_size) + 
-// //                                          (i + l * this->stride_col)] *
-// //                                     this->weight[(n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-// //                                                 (k * this->kernel_row_size * kernel_col_size) + 
-// //                                                 (j * this->kernel_col_size) + 
-// //                                                 i] * this->weight_scale;
-
-// // #elif QUANTIZATION_BITWIDTH == 4
-// //                                 // 4-bit quantization path
-// //                                 output[output_index] += 
-// //                                     input[(k * this->input_row_size * this->input_col_size) +
-// //                                          ((j + m * this->stride_row) * this->input_col_size) + 
-// //                                          (i + l * this->stride_col)] *
-// //                                     (((int8_t)(((this->weight[((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-// //                                          (k * this->kernel_row_size * kernel_col_size) + 
-// //                                          (j * this->kernel_col_size) + 
-// //                                          i) >> 1] >> (
-// //                                          (((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-// //                                          (k * this->kernel_row_size * kernel_col_size) + 
-// //                                          (j * this->kernel_col_size) + 
-// //                                          i) & 1) << 2)) & 0x0F) << 4)) >> 4) * this->weight_scale;
-// // #endif // QUANTIZATION_BITWIDTH
-// //                             }
-// //                         }
-// //                     }
-// //                     // Add bias
-// //                     output[output_index] += this->bias[n];
-// //                 }
-// //             }
-// //         }
-//         break;
-
-//     case PADDING_SAME:
-//         // TODO: Implement same padding
-//         break;
-//     }
-// }
-
-// #elif defined(STATIC_QUANTIZATION_PER_TENSOR)
-
-// // ======================================================================
-// // Static Quantization Implementation (Per-Tensor)
-// // ======================================================================
-
-// /**
-//  * @brief Constructor for statically quantized Conv2d layer
-//  * @param output_scale Output tensor scale factor
-//  * @param output_zero_point Output tensor zero point
-//  * @param input_zero_point Input tensor zero point
-//  * @param bias_scale Bias scale factor
-//  */
-// Conv2d::Conv2d(uint32_t input_channel_size, uint32_t input_row_size, uint32_t input_col_size,
-//                uint32_t output_channel_size, uint32_t kernel_row_size, uint32_t kernel_col_size,
-//                uint32_t stride_row, uint32_t stride_col, uint32_t padding, uint32_t groups,
-//                float output_scale, int8_t output_zero_point, int8_t input_zero_point,
-//                const int8_t* weight, const int32_t* bias, float bias_scale) {
-
-//     // Store layer parameters
-//     this->input_channel_size = input_channel_size;
-//     this->input_row_size = input_row_size;
-//     this->input_col_size = input_col_size;
-//     this->output_channel_size = output_channel_size;
-//     this->kernel_row_size = kernel_row_size;
-//     this->kernel_col_size = kernel_col_size;
-
-//     this->stride_row = stride_row;
-//     this->stride_col = stride_col;
-//     this->padding = padding;
-//     this->groups = groups;
-
-//     this->output_scale = output_scale;
-//     this->output_zero_point = output_zero_point;
-//     this->input_zero_point = input_zero_point;
-
-//     this->weight = weight;
-//     this->bias = bias;
-//     this->bias_scale = bias_scale;
-
-//     // Compute output dimensions
-//     this->output_row_size = ((this->input_row_size - this->kernel_row_size) / this->stride_row) + 1;
-//     this->output_col_size = ((this->input_col_size - this->kernel_col_size) / this->stride_col) + 1;
-// }
-
-// /**
-//  * @brief Forward pass for statically quantized Conv2d
-//  * @param input Input tensor (int8_t)
-//  * @param output Output tensor (int8_t)
-//  */
-// void Conv2d::forward(int8_t* input, int8_t* output) {
-//     int output_index;
-
-//     uint32_t input_channel_per_group = this->input_channel_size / this->groups;
-//     uint32_t output_channel_per_group = this->output_channel_size / this->groups;
-
-//     int32_t output_temp;
-//     uint32_t n, k;
-
-//     switch (this->padding) {
-//     case PADDING_VALID:
-
-//         for (uint32_t g = 0; g < this->groups; g++){
-//             // Output channel loop
-//             for (uint32_t c_out = 0; c_out < output_channel_per_group; c_out++) {
-//                 n = g * output_channel_per_group + c_out;
-//                 // Output spatial dimensions loops
-//                 for (uint32_t m = 0; m < this->output_row_size; m++) {
-//                     for (uint32_t l = 0; l < this->output_col_size; l++) {
-                        
-//                         // Calculate output index
-//                         output_index = (n * this->output_row_size * this->output_col_size) + 
-//                                     (m * this->output_col_size) + 
-//                                     l;
-//                         output_temp = 0;
-
-//                         for (uint32_t c_in = 0; c_in < input_channel_per_group; c_in++) {
-//                             k = g * input_channel_per_group + c_in;
-//                             for (uint32_t j = 0; j < kernel_row_size; j++) {
-//                                 for (uint32_t i = 0; i < kernel_col_size; i++) {
-// #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-//                                 // 8-bit quantization path
-//                                 output_temp += 
-//                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-//                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-//                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-//                                     (int32_t)this->weight[(n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                          (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                          (j * this->kernel_col_size) + 
-//                                                          i];
-// #elif QUANTIZATION_BITWIDTH == 4
-//                                 // 4-bit quantization path
-//                                 output_temp += 
-//                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-//                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-//                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-//                                     (int32_t)(((int8_t)(((this->weight[((n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                    (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                    (j * this->kernel_col_size) + 
-//                                                    i) >> 1] >> (
-//                                                    (((n * input_channel_per_group * this->kernel_row_size * this->kernel_col_size) +
-//                                                    (c_in * this->kernel_row_size * kernel_col_size) + 
-//                                                    (j * this->kernel_col_size) + 
-//                                                    i) & 1) << 2)) & 0x0F) << 4)) >> 4);
-// #endif // QUANTIZATION_BITWIDTH
-//                                 }
-//                             }
-//                         }
-//                     // Apply bias, scaling and clamping
-//                     output_temp += this->bias[n];
-//                     output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
-//                     output_temp += this->output_zero_point;
-                    
-//                     // Clamp to int8_t range
-//                     output[output_index] = output_temp < -128 ? (int8_t)-128 : 
-//                                          (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
-//                     }
-//                 }
-//             }
-//         }
-        
-// //         // Output channel loop
-// //         for (uint32_t n = 0; n < this->output_channel_size; n++) {
-// //             // Output spatial dimensions loops
-// //             for (uint32_t m = 0; m < this->output_row_size; m++) {
-// //                 for (uint32_t l = 0; l < this->output_col_size; l++) {
-                    
-// //                     // Calculate output index
-// //                     output_index = (n * this->output_row_size * this->output_col_size) + 
-// //                                   (m * this->output_col_size) + 
-// //                                   l;
-// //                     output_temp = 0;
-
-// //                     // Input channel and kernel loops
-// //                     for (uint32_t k = 0; k < input_channel_size; k++) {
-// //                         for (uint32_t j = 0; j < kernel_row_size; j++) {
-// //                             for (uint32_t i = 0; i < kernel_col_size; i++) {
-                                
-// // #if !defined(QUANTIZATION_BITWIDTH) || QUANTIZATION_BITWIDTH == 8
-// //                                 // 8-bit quantization path
-// //                                 output_temp += 
-// //                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-// //                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-// //                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-// //                                     (int32_t)this->weight[(n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-// //                                                          (k * this->kernel_row_size * kernel_col_size) + 
-// //                                                          (j * this->kernel_col_size) + 
-// //                                                          i];
-
-// // #elif QUANTIZATION_BITWIDTH == 4
-// //                                 // 4-bit quantization path
-// //                                 output_temp += 
-// //                                     ((int32_t)input[(k * this->input_row_size * this->input_col_size) +
-// //                                                    ((j + m * this->stride_row) * this->input_col_size) + 
-// //                                                    (i + l * this->stride_col)] - this->input_zero_point) *
-// //                                     (int32_t)(((int8_t)(((this->weight[((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-// //                                                    (k * this->kernel_row_size * kernel_col_size) + 
-// //                                                    (j * this->kernel_col_size) + 
-// //                                                    i) >> 1] >> (
-// //                                                    (((n * this->input_channel_size * this->kernel_row_size * this->kernel_col_size) +
-// //                                                    (k * this->kernel_row_size * kernel_col_size) + 
-// //                                                    (j * this->kernel_col_size) + 
-// //                                                    i) & 1) << 2)) & 0x0F) << 4)) >> 4);
-// // #endif // QUANTIZATION_BITWIDTH
-// //                             }
-// //                         }
-// //                     }
-                    
-// //                     // Apply bias, scaling and clamping
-// //                     output_temp += this->bias[n];
-// //                     output_temp = roundf(output_temp * this->bias_scale / this->output_scale);
-// //                     output_temp += this->output_zero_point;
-                    
-// //                     // Clamp to int8_t range
-// //                     output[output_index] = output_temp < -128 ? (int8_t)-128 : 
-// //                                          (output_temp > 127 ? (int8_t)127 : (int8_t)output_temp);
-// //                 }
-// //             }
-// //         }
-//         break;
-
-//     case PADDING_SAME:
-//         // TODO: Implement same padding
-//         break;
-//     }
-// }
-
-// #endif // QUANTIZATION_NONE
+#endif // QUANTIZATION_SCHEME

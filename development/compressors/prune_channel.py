@@ -18,6 +18,7 @@ class Prune_Channel:
         self.module = module
         self.keep_current_channel_index = keep_current_channel_index
         self.keep_prev_channel_index = keep_prev_channel_index
+
         # self.keep_current_channel_index.to(self.module.device)
         # self.keep_prev_channel_index.to(self.module.device)
 

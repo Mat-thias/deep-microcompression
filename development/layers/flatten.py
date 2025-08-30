@@ -86,9 +86,9 @@ class Flatten(Layer, nn.Flatten):
     def get_prune_channel_possible_hypermeters(self):
         return None
     
-    def init_quantize(self, bitwidth, scheme, granularity):
+    def init_quantize(self, bitwidth, scheme, granularity, previous_output_quantize = None):
         # Nothing to do
-        pass
+        return previous_output_quantize
 
 
     def get_size_in_bits(self):

@@ -10,31 +10,9 @@
 
 #include "layer.h"
 
+#if !defined(QUANTIZATION_SCHEME) || QUANTIZATION_SCHEME != STATIC
 
 
-#ifdef STATIC_QUANTIZATION_PER_TENSOR // QUANTIZATION_TYPE
-
-
-class Flatten : public Layer {
-private:
-    uint32_t input_size;  ///< Total number of elements in input tensor
-
-public:
-    /**
-     * @brief Constructor for quantized Flatten layer
-     * @param size Number of elements in input tensor
-     */
-    Flatten(uint32_t size);
-
-    /**
-     * @brief Forward pass for quantized flatten operation
-     * @param input Pointer to input tensor (int8_t)
-     * @param output Pointer to output tensor (int8_t)
-     */
-    void forward(int8_t* input, int8_t* output);
-};
-
-#else // DYNAMIC_QUANTIZATION_PER_TENSOR
 
 /**
  * @class Flatten
@@ -64,39 +42,29 @@ public:
 
 
 
-#endif // QUANTIZATION_TYPE
 
-// #if !defined(STATIC_QUANTIZATION_PER_TENSOR)
+#else // QUANTIZATION_SCHEME
+
+class Flatten : public Layer {
+private:
+    uint32_t input_size;  ///< Total number of elements in input tensor
+
+public:
+    /**
+     * @brief Constructor for quantized Flatten layer
+     * @param size Number of elements in input tensor
+     */
+    Flatten(uint32_t size);
+
+    /**
+     * @brief Forward pass for quantized flatten operation
+     * @param input Pointer to input tensor (int8_t)
+     * @param output Pointer to output tensor (int8_t)
+     */
+    void forward(int8_t* input, int8_t* output);
+};
 
 
-// #else // STATIC_QUANTIZATION_PER_TENSOR
-
-// /**
-//  * @class Flatten
-//  * @brief Flatten layer implementation for quantized models
-//  * 
-//  * Quantized version maintains same functionality as floating-point version,
-//  * but operates on int8_t tensors.
-//  */
-// class Flatten : public Layer {
-// private:
-//     uint32_t input_size;  ///< Total number of elements in input tensor
-
-// public:
-//     /**
-//      * @brief Constructor for quantized Flatten layer
-//      * @param size Number of elements in input tensor
-//      */
-//     Flatten(uint32_t size);
-
-//     /**
-//      * @brief Forward pass for quantized flatten operation
-//      * @param input Pointer to input tensor (int8_t)
-//      * @param output Pointer to output tensor (int8_t)
-//      */
-//     void forward(int8_t* input, int8_t* output);
-// };
-
-// #endif // STATIC_QUANTIZATION_PER_TENSOR
+#endif // QUANTIZATION_SCHEME
 
 #endif // FLATTEN_H

@@ -75,8 +75,8 @@ class Conv2d(Layer, nn.Conv2d):
                     
             
             if self.is_quantized:
-                if hasattr(self, "input_quantize"):
-                    input = self.input_quantize(input)
+            #     if hasattr(self, "input_quantize"):
+            #         input = self.input_quantize(input)
                 weight = self.weight_quantize(weight)
                 if self.bias is not None and hasattr(self, "bias_quantize"):
                     bias = self.bias_quantize(bias)
@@ -130,7 +130,6 @@ class Conv2d(Layer, nn.Conv2d):
 
         if keep_prev_channel_index is None:
             keep_prev_channel_index = torch.arange(self.in_channels)
-
         if self.groups == self.out_channels:
 
             keep_prev_channel_index_temp = keep_prev_channel_index
@@ -149,14 +148,17 @@ class Conv2d(Layer, nn.Conv2d):
                 importance = self.weight.pow(2) if metric == "l2" else self.weight.abs()
                 channel_importance = importance.sum(dim=[1, 2, 3])
                 keep_current_channel_index = torch.sort(torch.topk(channel_importance, density, dim=0).indices).values
-    
+                
+        self.register_buffer("keep_current_channel_index", keep_current_channel_index.to(self.weight.device))
+        self.register_buffer("keep_prev_channel_index", keep_prev_channel_index.to(self.weight.device))
+
         setattr(self, "weight_prune_channel", Prune_Channel(
-            module=self, keep_current_channel_index=keep_current_channel_index, keep_prev_channel_index=keep_prev_channel_index
+            module=self, keep_current_channel_index=self.keep_current_channel_index, keep_prev_channel_index=self.keep_prev_channel_index
         ))
 
         if self.bias is not None:
             setattr(self, "bias_prune_channel", Prune_Channel(
-                module=self, keep_current_channel_index=keep_current_channel_index
+                module=self, keep_current_channel_index=self.keep_current_channel_index
             ))
         return keep_current_channel_index
 
@@ -168,7 +170,7 @@ class Conv2d(Layer, nn.Conv2d):
 
 
     @torch.no_grad()
-    def init_quantize(self, bitwidth, scheme, granularity):
+    def init_quantize(self, bitwidth, scheme, granularity, previous_output_quantize=None):
         if not self.is_pruned_channel:
             setattr(self, "weight_quantize", Quantize(
                 self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC
@@ -177,10 +179,10 @@ class Conv2d(Layer, nn.Conv2d):
             setattr(self, "weight_quantize", Quantize(
                 self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, prune_channel=self.weight_prune_channel
             ))
-
         if scheme == QuantizationScheme.STATIC:
+            assert previous_output_quantize is not None
             setattr(self, "input_quantize", Quantize(
-                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
+                self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC, base=[previous_output_quantize]
             ))
             setattr(self, "output_quantize", Quantize(
                 self, bitwidth, scheme, QuantizationGranularity.PER_TENSOR, scale_type=QuantizationScaleType.ASSYMMETRIC
@@ -188,19 +190,11 @@ class Conv2d(Layer, nn.Conv2d):
 
         if self.bias is not None:
             if not self.is_pruned_channel:
-                # if scheme == QuantizationScheme.DYNAMIC:
-                #     setattr(self, "bias_quantize", Quantize(
-                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize]
-                #     ))
                 if scheme == QuantizationScheme.STATIC:
                     setattr(self, "bias_quantize", Quantize(
                         self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize]
                     ))
             else:
-                # if scheme == QuantizationScheme.DYNAMIC:
-                #     setattr(self, "bias_quantize", Quantize(
-                #         self, bitwidth, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize], prune_channel=self.bias_prune_channel
-                #     ))
                 if scheme == QuantizationScheme.STATIC:
                     setattr(self, "bias_quantize", Quantize(
                         self, STATIC_BIAS_BITWDHT, scheme, granularity, scale_type=QuantizationScaleType.SYMMETRIC, base=[self.weight_quantize, self.input_quantize], prune_channel=self.bias_prune_channel
@@ -211,7 +205,9 @@ class Conv2d(Layer, nn.Conv2d):
             self.weight_quantize.update_parameters(self.weight) 
             # if self.bias is not None:
             #     self.bias_quantize.update_parameters(self.bias)
- 
+        if hasattr(self, "output_quantize"):
+            return self.output_quantize 
+        return None
 
     @torch.no_grad()
     def get_size_in_bits(self) -> int:
@@ -463,6 +459,7 @@ class Conv2d(Layer, nn.Conv2d):
                 self.output_quantize.zero_point, 
                 f"{var_name}_output_zero_point"
             )
+
             layer_header += param_header
             layer_param_def += param_def
 
@@ -472,7 +469,6 @@ class Conv2d(Layer, nn.Conv2d):
             )
             layer_header += param_header
             layer_param_def += param_def
-
 
             if self.bias is not None:
                 bias_scale = self.bias_quantize.scale
