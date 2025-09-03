@@ -61,17 +61,17 @@ class Sequential(nn.Sequential):
         super(Sequential, self).__init__()
         setattr(self, "_dmc", dict())
 
+        self.class_idx = dict()
         if len(args) == 1 and isinstance(args[0], OrderedDict):
             for key, module in args[0].items():
                 self.add_module(key, module)
         else:
-            class_idx = dict()
             
             # Auto-name layers with type_index convention (e.g. conv2d_0)
             for layer in args:
                 if isinstance(layer, Layer) and isinstance(layer, nn.Module): 
-                    class_idx[layer.__class__.__name__] = class_idx.get(layer.__class__.__name__, -1) + 1
-                    idx = class_idx[layer.__class__.__name__]
+                    idx = self.class_idx.get(layer.__class__.__name__, -1) + 1
+                    self.class_idx[layer.__class__.__name__] = idx
                     layer_type = layer.__class__.__name__.lower()
                     self.add_module(f"{layer_type}_{idx}", layer)
                 else:
@@ -107,7 +107,21 @@ class Sequential(nn.Sequential):
                 return self[list(self.names())[idx]]
             raise IndexError(f"index {idx} is out of range")
         else:
-            raise IndexError(f"Unknown index {index}")
+            raise IndexError(f"Unknown index {idx}")
+        
+    def __add__(self, other) -> "Sequential":
+        if isinstance(other, Sequential):
+            for layer in other:
+                self += layer
+            return self
+        elif isinstance(other, Layer):
+            idx = self.class_idx.get(other.__class__.__name__, -1) + 1
+            self.class_idx[other.__class__.__name__] = idx
+            layer_type = other.__class__.__name__.lower()
+            self.add_module(f"{layer_type}_{idx}", other)
+            return self
+        raise RuntimeError(f"cannot add type{other} to Sequential")
+
     
 
     @property
@@ -468,6 +482,7 @@ class Sequential(nn.Sequential):
                 is_output_layer=False, metric=metric
             )
             _, input_shape = layer.get_output_tensor_shape(input_shape)
+
 
         # Prune last layer
         name, layer = list(self.names_layers())[-1]
