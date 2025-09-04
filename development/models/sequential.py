@@ -7,10 +7,8 @@ __all__ = [
     "Sequential"
 ]
 
-import copy
-import math
+import copy, math, random, itertools
 from os import path
-import itertools
 from typing import (
     List, Tuple, Dict, OrderedDict, Iterable, Callable, Optional, Union
 )
@@ -37,7 +35,6 @@ from ..utils import (
     QuantizationScaleType,
     QuantizationGranularity,
 )
-
 from .fuse import *
 
 class Sequential(nn.Sequential):
@@ -162,7 +159,7 @@ class Sequential(nn.Sequential):
 
 
     def fit(
-        self, train_dataloader: data.DataLoader, epochs: int, 
+        self, train_dataloader: Union[data.DataLoader, Tuple], epochs: int, 
         criterion_fun: torch.nn.Module, 
         optimizer_fun: torch.optim.Optimizer,
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
@@ -170,6 +167,7 @@ class Sequential(nn.Sequential):
         metrics: Dict[str, Callable[[torch.Tensor, torch.Tensor], float]] = {},
         verbose: bool = True,
         callbacks: List[Callable] = [],
+        batch_size = 32,
         device: str = "cpu"
     ) -> Dict[str, List[float]]:
         """Training loop with optional validation and metrics tracking
@@ -186,6 +184,26 @@ class Sequential(nn.Sequential):
         """
         history = dict()
         metrics_values = dict()
+
+        if isinstance(train_dataloader, tuple):
+            assert len(train_dataloader) == 2, "Contains more than 2 elements"
+            class Dataset(torch.utils.data.Dataset):
+
+                def __init__(self, train_dataloader) -> None:
+                    self.X = train_dataloader[0]
+                    self.y = train_dataloader[1]
+                    assert len(self.X) == len(self.y)
+
+                def __len__(self):
+                    return len(self.y)
+                
+                def __getitem__(self, index):
+                    return self.X[index], self.y[index]
+                
+            train_dataloader = torch.utils.data.DataLoader(Dataset(train_dataloader), batch_size=batch_size, shuffle=True)
+
+            if validation_dataloader is not None and isinstance(validation_dataloader, tuple):
+                validation_dataloader = torch.utils.data.DataLoader(Dataset(validation_dataloader), batch_size=batch_size, shuffle=True)
 
         for epoch in tqdm(range(epochs)):
             # Training phase
@@ -553,7 +571,7 @@ class Sequential(nn.Sequential):
     def get_prune_channel_possible_hypermeters(self):
         prune_possible_hypermeters = dict()
 
-        for name, layer in self.names_layers():
+        for name, layer in list(self.names_layers())[:-1]:
             layer_prune_possible_hypermeters = layer.get_prune_channel_possible_hypermeters()
             if layer_prune_possible_hypermeters is not None:
                 prune_possible_hypermeters[name] = layer_prune_possible_hypermeters
@@ -860,27 +878,42 @@ class Sequential(nn.Sequential):
 
 
 
-
-
-
-
-    def get_layers_prune_channel_sensity_(self, input_shape, data_loader, metrics, device="cpu") -> Dict[str, Dict[str, List[Tuple[int, float]]]]:
+    def get_layers_prune_channel_sensity_(
+        self, 
+        input_shape, 
+        data_loader, 
+        metrics, 
+        device="cpu",
+        train = False,
+        train_dataloader = None,
+        epochs = None,
+        criterion_fun = None,
+        optimizer_fun = None,
+        lr_scheduler = None,
+        callbacks = [],
+    ) -> Dict[str, Dict[str, List[Tuple[int, float]]]]:
 
         prune_channel_hp = self.get_prune_channel_possible_hypermeters()
         prune_channel_layers_sensity = dict.fromkeys(metrics.keys(), dict())
 
+        if train:
+            assert train_dataloader is not None
+            assert epochs is not None
+            assert criterion_fun is not None
+            assert optimizer_fun is not None
+
         i = 0
-        for layer_name, prune_channel_hp in prune_channel_hp.items():
+        for layer_name, layer_prune_channel_hp in prune_channel_hp.items():
 
             for metric_name in metrics.keys():
                 prune_channel_layers_sensity[metric_name].update({layer_name : list()})
 
-            for prune_channel in prune_channel_hp:
-                if prune_channel_hp == 0: continue
+            max_layer_prune_channel_hp = layer_prune_channel_hp.stop
+            for layer_prune_channel in layer_prune_channel_hp:
                 compression_config = {
                     "prune_channel" :{
                         "sparsity" : {
-                            layer_name: prune_channel
+                            layer_name: layer_prune_channel
                         },
                         "metric" : "l2"
                     },
@@ -888,10 +921,75 @@ class Sequential(nn.Sequential):
                 prune_channel_model = self.init_compress(config=compression_config, input_shape=input_shape)
                 prune_channel_model_metrics = prune_channel_model.evaluate(data_loader=data_loader, metrics=metrics, device=device)
 
-                for metric_name in metrics.keys():
-                    prune_channel_layers_sensity[metric_name][layer_name].append((prune_channel, prune_channel_model_metrics[metric_name]))
+                if train:
+                    optimizer_fun = torch.optim.SGD(prune_channel_model.parameters(), lr=1e-3, momentum=.9, weight_decay=5e-4)
+                    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_fun, mode="min", patience=1)
+
+                    prune_channel_model.fit(
+                        train_dataloader=train_dataloader,
+                        epochs=epochs,
+                        criterion_fun=criterion_fun,
+                        optimizer_fun=optimizer_fun,
+                        lr_scheduler=lr_scheduler,
+                        validation_dataloader=data_loader,
+                        metrics=metrics,
+                        verbose=False,
+                        callbacks=callbacks,
+                        device=device
+                    )
+
+                    prune_channel_model_metrics_train = prune_channel_model.evaluate(data_loader=data_loader, metrics=metrics, device=device)
+
+                    for metric_name in metrics.keys():
+                        prune_channel_layers_sensity[metric_name][layer_name].append((layer_prune_channel/max_layer_prune_channel_hp, prune_channel_model_metrics[metric_name], prune_channel_model_metrics_train[metric_name]))
+                else:
+                    for metric_name in metrics.keys():
+                        prune_channel_layers_sensity[metric_name][layer_name].append((layer_prune_channel/max_layer_prune_channel_hp, prune_channel_model_metrics[metric_name]))
 
         return prune_channel_layers_sensity
+    
+
+    def get_nas_prune_channel(
+        self,
+        input_shape, 
+        data_loader, 
+        metric_fun, 
+        device="cpu",
+        num_data=100
+    ):
+        prune_channel_hp = self.get_prune_channel_possible_hypermeters()
+        param = []
+
+        for _ in range(num_data):
+            prune_param_config = dict()
+            prune_param = list()
+            for layer_name, layer_prune_channel_hp in prune_channel_hp.items():
+                random_layer_prune_channel_hp = random.choice(layer_prune_channel_hp)
+                prune_param.append(random_layer_prune_channel_hp)
+                prune_param_config[layer_name] = random_layer_prune_channel_hp
+            print(prune_param_config)
+            compression_config = {
+                    "prune_channel" :{
+                        "sparsity" : prune_param_config,
+                        "metric" : "l2"
+                    },
+                }
+            
+            prune_channel_model = self.init_compress(config=compression_config, input_shape=input_shape)
+            prune_channel_model_metric = prune_channel_model.evaluate(data_loader=data_loader, metrics={"metric": metric_fun}, device=device)
+
+            param.append(prune_param + [prune_channel_model_metric["metric"]])
+
+        estimator = Estimator(param)
+        print(estimator.fit(device=device))
+
+        return estimator
+    
+ 
+        
+
+
+        
     
 
     def get_weight_distributions(self, bins=256) -> Dict[str, Optional[torch.Tensor]]:
@@ -1188,3 +1286,69 @@ class Sequential(nn.Sequential):
 
         return model
 #
+
+
+class Estimator:
+
+    def __init__(self, data) -> None:
+        self.data = data
+
+        self.x_mu = 0
+        self.x_std = 1
+
+        self.model = None
+
+    def _normalize(self, X):
+        return (X - self.x_mu) / self.x_std
+
+    def fit(self, device):
+        
+        data = torch.Tensor(self.data)
+
+        X, Y = data[:,:-1], data[:,-1].unsqueeze(dim=1)
+        
+        self.x_mu = X.mean(dim=0)
+        x_std = X.std(dim=0)
+        self.x_std = torch.where(x_std >1e-10, x_std, torch.ones_like(x_std))
+
+        X = self._normalize(X)
+
+        N = X.size(0)
+        idx = torch.randperm(N)
+        n_val = int(N * .8)
+
+        print(N, n_val, Y.shape)
+        val_idx, train_idx = idx[:n_val], idx[n_val:]
+        print(val_idx, train_idx)
+        X_train, Y_train = X[train_idx], Y[train_idx]
+        X_val, Y_val = X[val_idx], Y[val_idx]
+        
+        self.model = Sequential(
+            Linear(X.size(1), 100),
+            ReLU(),
+            Linear(100, 100),
+            ReLU(),
+            Linear(100, 1)
+        )
+        self.model.to(device)
+
+        optimizer_fun = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        criterion_fun = nn.MSELoss()
+
+        history = self.model.fit(
+            train_dataloader=(X_train, Y_train), epochs=100, 
+            criterion_fun=criterion_fun, optimizer_fun=optimizer_fun, 
+            validation_dataloader=(X_val, Y_val),
+            metrics={"mse": nn.MSELoss()},
+            device=device, batch_size=64
+        )
+        return history
+    
+    def predict(self, X):
+        X = self._normalize(X)
+
+        return self.model(X)
+        
+
+
+
