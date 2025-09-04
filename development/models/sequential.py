@@ -12,7 +12,7 @@ import math
 from os import path
 import itertools
 from typing import (
-    List, Dict, OrderedDict, Iterable, Callable, Optional, Union
+    List, Tuple, Dict, OrderedDict, Iterable, Callable, Optional, Union
 )
 from tqdm.auto import tqdm
 
@@ -517,9 +517,6 @@ class Sequential(nn.Sequential):
                         if name not in self.names():
                             return False
                             # raise NameError(f"Found unknown layer name {name}")
-                        if not self[name].is_prunable():
-                            return False
-                            # raise ValueError(f"layer of name {name} is not prunable")
                         if not isinstance(layer_sparsity, float) and layer_sparsity not in self[name].get_prune_channel_possible_hypermeters():
                             return False
                             # raise ValueError(f"Recieved a layer_sparsity of {layer_sparsity} ")
@@ -666,7 +663,7 @@ class Sequential(nn.Sequential):
 
 
 
-    def get_max_workspace_arena(self, input_shape) -> tuple:
+    def get_max_workspace_arena(self, input_shape) -> Tuple:
         """Calculate memory requirements for C deployment by running sample input
         
         Returns:
@@ -867,7 +864,34 @@ class Sequential(nn.Sequential):
 
 
 
+    def get_layers_prune_channel_sensity_(self, input_shape, data_loader, metrics, device="cpu") -> Dict[str, Dict[str, List[Tuple[int, float]]]]:
 
+        prune_channel_hp = self.get_prune_channel_possible_hypermeters()
+        prune_channel_layers_sensity = dict.fromkeys(metrics.keys(), dict())
+
+        i = 0
+        for layer_name, prune_channel_hp in prune_channel_hp.items():
+
+            for metric_name in metrics.keys():
+                prune_channel_layers_sensity[metric_name].update({layer_name : list()})
+
+            for prune_channel in prune_channel_hp:
+                if prune_channel_hp == 0: continue
+                compression_config = {
+                    "prune_channel" :{
+                        "sparsity" : {
+                            layer_name: prune_channel
+                        },
+                        "metric" : "l2"
+                    },
+                }
+                prune_channel_model = self.init_compress(config=compression_config, input_shape=input_shape)
+                prune_channel_model_metrics = prune_channel_model.evaluate(data_loader=data_loader, metrics=metrics, device=device)
+
+                for metric_name in metrics.keys():
+                    prune_channel_layers_sensity[metric_name][layer_name].append((prune_channel, prune_channel_model_metrics[metric_name]))
+
+        return prune_channel_layers_sensity
     
 
     def get_weight_distributions(self, bins=256) -> Dict[str, Optional[torch.Tensor]]:
